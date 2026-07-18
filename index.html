@@ -124,12 +124,16 @@
     });
 
     btn.addEventListener('click', async ()=>{
-      btn.disabled=true; btn.textContent='AR起動中…';
+      btn.disabled=true; btn.textContent='AR起動中…（許可が出たら承認）';
+      log("requestSession 呼び出し…（初回は「許可/Allow」ダイアログが出ます。air-tapで承認）");
       try{
-        const s=await navigator.xr.requestSession('immersive-ar',{requiredFeatures:['local'], optionalFeatures:['hand-tracking']});
+        const req=navigator.xr.requestSession('immersive-ar',{requiredFeatures:['local']});
+        const to=new Promise((_,rej)=>setTimeout(()=>rej(new Error('TIMEOUT: 許可ダイアログ未承認の可能性（視界内のAllow/はいをair-tap）')),20000));
+        const s=await Promise.race([req,to]);
+        log("✓ requestSession成功");
         await renderer.xr.setSession(s);
         log("✓ setSession完了（AR内にモデル）");
-        s.addEventListener('end',()=>{log("session終了 frames="+frames);btn.disabled=false;btn.textContent='▶ ENTER AR';});
+        s.addEventListener('end',()=>{log("session終了 frames="+frames);btn.disabled=false;btn.textContent='▶ ENTER AR';btn.style.display='';});
         btn.style.display='none';
       }catch(e){ log("✗ AR起動エラー: "+(e.name||'')+": "+(e.message||e)); btn.disabled=false; btn.textContent='▶ 再試行'; }
     });
