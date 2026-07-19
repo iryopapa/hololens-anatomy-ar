@@ -33,6 +33,10 @@
     #panel .hd b{ font-size:15px; } #panel .hd .mini{ font-size:13px; color:var(--sub); }
     #panel .allnone{ display:flex; gap:8px; padding:0 16px 10px; }
     #panel .allnone button{ flex:1; font-size:13px; padding:8px; min-height:38px; }
+    #panel .srch{ padding:0 16px 10px; display:flex; align-items:center; gap:8px; }
+    #panel .srch input{ flex:1; min-height:40px; border-radius:10px; border:1px solid var(--line);
+      background:#0f1220; color:var(--txt); font-size:15px; padding:8px 12px; }
+    #panel .srch input::placeholder{ color:#5a668a; }
     #list{ overflow:auto; -webkit-overflow-scrolling:touch; padding:0 8px 16px; }
     .row{ display:flex; align-items:center; gap:12px; padding:12px 10px; border-radius:12px; }
     .row:active{ background:#20263f; }
@@ -69,12 +73,12 @@
     <h1>解剖アトラス</h1>
     <div class="sp"></div>
     <button class="btn" id="dissectBtn">✂ 解剖</button>
-    <button class="btn" id="modelBtn">モデル</button>
     <button class="btn" id="resetBtn">リセット</button>
   </div>
   <div id="panel">
     <div class="hd"><b>ボディシステム</b><span class="mini" id="sysCount"></span></div>
     <div class="allnone"><button class="btn" id="allBtn">すべて表示</button><button class="btn" id="noneBtn">すべて非表示</button></div>
+    <div class="srch"><input id="searchBox" type="search" placeholder="構造を検索（肝臓 / liver …）" /><span class="mini" id="searchCount"></span></div>
     <div id="list"></div>
   </div>
   <div id="sel">
@@ -134,17 +138,47 @@
     ];
     const OTHER = { key:'other', label:'その他', color:'#9aa4bf' };
 
+    // 男性(Z-Anatomy)モデルは活用困難につき撤去。女性HuBMAP一本で運用。SYS_MALEは将来用に残置(未使用)。
     const MODELS = [
       { key:'female', label:'♀ 女性(臓器)', url:'./vendor/anatomy.glb', systems:SYS_FEMALE,
         defaultHide:/umbilical_cord|umbilical_artery|umbilical_vein|placenta|amnion|chorionic_plate|basal_plate|mammary_lobes|_nipple_|_areola|_fat_[lr]$/i },
-      { key:'male', label:'♂ 男性(全身)', url:'./vendor/zbody.glb', systems:SYS_MALE, colorBySystem:true, norm:true,
-        defaultHide:/scrotum|penis|penile|glans|prepuce|cavernosum|spongiosum/i },
     ];
     let curIdx = 0, curModel = MODELS[0];
     let SYSTEMS = curModel.systems, DEFAULT_HIDE = curModel.defaultHide;
     let sysByKey = Object.fromEntries([...SYSTEMS, OTHER].map(s=>[s.key,s]));
     // Z-Anatomy(男性)はglTF書き出しで空白→_/.→_に変換される→スペースへ正規化してから分類
     function classify(name){ const n = curModel.norm ? name.replace(/[_.]/g,' ') : name; for(const s of SYSTEMS){ if(s.re.test(n)) return s.key; } return 'other'; }
+
+    // 日本語名辞書（主要構造・特異的なものから先に）。検索(日/英)と選択カード表示に使用。
+    const JP = [
+      [/optic_nerve/i,'視神経'],[/optic_chiasm/i,'視交叉'],[/optic_tract/i,'視索'],[/optic_radiation/i,'視放線'],
+      [/cornea/i,'角膜'],[/sclera/i,'強膜'],[/\biris/i,'虹彩'],[/pupil/i,'瞳孔'],[/_lens_|(^|_)lens/i,'水晶体'],
+      [/retina/i,'網膜'],[/macula/i,'黄斑'],[/fovea/i,'中心窩'],[/vitreous/i,'硝子体'],[/ciliary/i,'毛様体'],
+      [/optic_choroid|choroid/i,'脈絡膜'],[/eyelid/i,'眼瞼'],[/lacrimal/i,'涙器'],[/conjunctiva/i,'結膜'],
+      [/extraocular/i,'外眼筋'],[/zonular|suspensory_ligament_of_lens/i,'チン小帯'],[/eyeball/i,'眼球'],
+      [/liver|hepatic/i,'肝臓'],[/gallbladder/i,'胆嚢'],[/cystic_duct|bile/i,'胆管'],[/stomach|gastric/i,'胃'],
+      [/duoden/i,'十二指腸'],[/jejun|jejen/i,'空腸'],[/ileum|ileoc/i,'回腸'],[/caecum|cecum/i,'盲腸'],
+      [/appendix|vermiform/i,'虫垂'],[/colon/i,'結腸'],[/rectum|rectal/i,'直腸'],[/anus|anal/i,'肛門'],
+      [/pancrea/i,'膵臓'],[/spleen|splenic/i,'脾臓'],[/esophag|oesophag/i,'食道'],[/intestin/i,'腸'],
+      [/mesentery|mesocolon/i,'腸間膜'],[/omentum/i,'大網'],[/peritone/i,'腹膜'],
+      [/kidney|renal/i,'腎臓'],[/ureter/i,'尿管'],[/bladder/i,'膀胱'],[/urethra/i,'尿道'],[/calyx|calyc/i,'腎杯'],
+      [/uterus|uterine/i,'子宮'],[/ovary|ovarian/i,'卵巣'],[/vagina/i,'膣'],[/cervix|cervico/i,'子宮頸部'],
+      [/uterine_tube|fallopian|salpinx/i,'卵管'],[/placenta/i,'胎盤'],[/umbilical/i,'臍帯'],[/mammary/i,'乳腺'],
+      [/heart|myocard/i,'心臓'],[/atrium/i,'心房'],[/interventricular|ventricle_of_heart/i,'心室'],
+      [/aorta|aortic/i,'大動脈'],[/vena_cava|_cava/i,'大静脈'],[/coronary/i,'冠動脈'],[/portal/i,'門脈'],
+      [/artery|arterial/i,'動脈'],[/vein|venous/i,'静脈'],[/valve/i,'弁'],
+      [/lung/i,'肺'],[/bronch/i,'気管支'],[/trachea/i,'気管'],[/larynx/i,'喉頭'],[/pharynx/i,'咽頭'],
+      [/pleura/i,'胸膜'],[/diaphragm/i,'横隔膜'],[/alveol/i,'肺胞'],[/thyroid_cartilage/i,'甲状軟骨'],
+      [/cerebell/i,'小脳'],[/brain|cerebr/i,'大脳'],[/spinal_cord/i,'脊髄'],[/thalamus/i,'視床'],
+      [/hypothalam/i,'視床下部'],[/ventricle/i,'脳室'],[/nucleus/i,'神経核'],[/nerve/i,'神経'],
+      [/femur|femoral/i,'大腿骨'],[/patella/i,'膝蓋骨'],[/tibia/i,'脛骨'],[/fibula/i,'腓骨'],
+      [/pelvi|hip_bone/i,'骨盤'],[/ilium/i,'腸骨'],[/ischium/i,'坐骨'],[/pubis/i,'恥骨'],
+      [/vertebra/i,'椎骨'],[/sacrum/i,'仙骨'],[/coccyx/i,'尾骨'],[/_rib|costal/i,'肋骨'],[/sternum/i,'胸骨'],
+      [/cruciate|meniscus|_knee/i,'膝関節'],[/cartilage/i,'軟骨'],[/ligament/i,'靭帯'],
+      [/adrenal|suprarenal_gland/i,'副腎'],[/lymph|^yao_/i,'リンパ'],[/thymus/i,'胸腺'],
+      [/rectus_femoris|quadriceps/i,'大腿四頭筋'],[/(^|_)skin$/i,'皮膚'],[/_fat_/i,'脂肪'],
+    ];
+    function jpName(raw){ for(const [re,jp] of JP){ if(re.test(raw)) return jp; } return null; }
 
     // ===== Three.js =====
     const canvas = document.getElementById('c');
@@ -180,7 +214,6 @@
       closeSel();
       while(root.children.length){ const m=root.children[0]; root.remove(m); disposeObj(m); }
       pickables.length = 0; for(const k in bySystem) delete bySystem[k];
-      document.getElementById('modelBtn').textContent = def.label;
       loadEl.style.display='flex'; loadEl.classList.remove('fadeout'); loadT.textContent='モデル読み込み中…';
       loader.load(def.url,
         (gltf)=>{
@@ -212,7 +245,9 @@
           const dist = radius / Math.tan(THREE.MathUtils.degToRad(camera.fov*0.5)) * 1.5;
           HOME.pos.set(0, size.y*0.05, dist); HOME.tgt.set(0,0,0);
           controls.minDistance = radius*0.15; controls.maxDistance = radius*10; goHome();
+          for (const s of SYSTEMS){ if(s.off){ for(const m of (bySystem[s.key]||[])) m.visible=false; } }  // 既定オフ系統
           buildTree();
+          pickables.forEach(m=>m.userData.defVis = m.visible);   // 既定の可視状態を記録（検索/リセット復帰用）
           loadEl.classList.add('fadeout'); setTimeout(()=>{ loadEl.style.display='none'; }, 550);
         },
         (ev)=>{ if (ev.total) loadT.textContent = 'モデル読み込み中… ' + Math.round(ev.loaded/ev.total*100) + '%'; },
@@ -230,7 +265,6 @@
       for (const s of present){
         const meshes = bySystem[s.key] || [];
         const startOn = !s.off;
-        if (!startOn) for (const m of meshes) m.visible = false;   // 既定オフ(表面/領域など)
         const row = document.createElement('div');
         row.className = 'row' + (startOn ? ' on' : '');
         row.innerHTML = `<span class="dot" style="background:${s.color}"></span>
@@ -295,7 +329,8 @@
       if (selected && selected !== o) highlight(selected, false);
       selected = o; highlight(o, true);
       const s = sysByKey[o.userData.sys] || OTHER;
-      document.getElementById('selName').textContent = humanize(o.name);
+      const jp = jpName(o.name);
+      document.getElementById('selName').textContent = jp ? (jp + '  /  ' + humanize(o.name)) : humanize(o.name);
       document.getElementById('selRaw').textContent = o.name;
       document.getElementById('selSys').innerHTML = `<span class="dot" style="background:${s.color}"></span>${s.label}`;
       selEl.classList.add('show');
@@ -327,15 +362,31 @@
       dissectBtn.textContent = dissect ? '✂ 解剖中' : '✂ 解剖';
       if (dissect) closeSel();
     });
+    // 既定状態へ復帰（既定非表示・既定オフ系統は隠れたまま）
+    function restoreDefault(){
+      for (const m of pickables){ if(m.userData.faded) fade(m); m.visible = m.userData.defVis; }
+      buildTree();
+    }
+    // 構造検索（日本語/英語）: 一致した構造だけ表示。空欄で既定へ復帰。
+    const searchBox = document.getElementById('searchBox'), searchCount = document.getElementById('searchCount');
+    searchBox.addEventListener('input', () => {
+      const q = searchBox.value.trim().toLowerCase();
+      if (!q){ restoreDefault(); searchCount.textContent=''; return; }
+      let n=0;
+      for (const m of pickables){
+        const hit = humanize(m.name).toLowerCase().includes(q) || (jpName(m.name)||'').includes(q) || m.name.toLowerCase().includes(q);
+        m.visible = hit; if (hit) n++;
+      }
+      searchCount.textContent = n + '件';
+    });
     function resetView(){
-      setAll(true); buildTree(); closeSel(); goHome();
+      searchBox.value=''; searchCount.textContent='';
+      restoreDefault(); closeSel(); goHome();
       dissect = false; dissectBtn.classList.remove('acc'); dissectBtn.textContent = '✂ 解剖';
-      for (const m of pickables){ if (m.userData.faded) fade(m); }   // フェード解除
     }
     document.getElementById('resetBtn').addEventListener('click', resetView);
     document.getElementById('allBtn').addEventListener('click', () => setAll(true));
     document.getElementById('noneBtn').addEventListener('click', () => setAll(false));
-    document.getElementById('modelBtn').addEventListener('click', () => { curIdx = (curIdx+1) % MODELS.length; loadModel(MODELS[curIdx]); });
     setTimeout(()=>document.getElementById('hint').classList.add('fadeout'), 6000);
 
     addEventListener('resize', () => { camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });

@@ -1,5 +1,5 @@
 // 解剖アトラス PWA サービスワーカー（オフライン対応・アプリシェル＋モデルを事前キャッシュ）
-const CACHE = 'atlas-v6';
+const CACHE = 'atlas-v7';
 const CORE = [
   './',
   './index.html',
@@ -14,7 +14,6 @@ const CORE = [
   './vendor/draco/draco_wasm_wrapper.js',
   './vendor/draco/draco_decoder.wasm',
   './vendor/anatomy.glb',
-  './vendor/zbody.glb',
 ];
 
 self.addEventListener('install', (e) => {
