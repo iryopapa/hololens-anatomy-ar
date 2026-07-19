@@ -50,6 +50,8 @@
 
     // === 操作: 片手=移動(＋手首の傾け) / 両手=ターンテーブル回転＋拡大縮小＋移動 ===
     //   背中側を見るには「両手でつまんで、両手を回す」＝モデルがY軸で回る(180°超も連続)。
+    //   回転ゲイン: 手の回転角×ROT_GAIN でモデルが回る(手60°→モデル180°)。背面に届きやすく。
+    const ROT_GAIN=3;
     const ctrls=[renderer.xr.getController(0), renderer.xr.getController(1)];
     ctrls.forEach(c=>{ c.userData.sel=false; scene.add(c); });
     let oneGrab=null;   // 片手アタッチ中のコントローラ
@@ -89,7 +91,7 @@
       // 回転(両手の角度・±πの折返しをアンラップして連続化)
       const yaw=yawOf(a,b);
       let d=yaw-two.prevYaw; if(d>Math.PI)d-=2*Math.PI; else if(d<-Math.PI)d+=2*Math.PI;
-      two.accum+=d; two.prevYaw=yaw;
+      two.accum+=d*ROT_GAIN; two.prevYaw=yaw;   // ゲインで増幅＝少ない手の回転で背面まで
       root.rotation.y=two.rootYaw0+two.accum;
       // 移動(両手の中点)
       root.position.copy(two.pos0).add(midOf(a,b).sub(two.mid0));
@@ -133,7 +135,8 @@
         // local座標は原点=頭の位置。目線やや下・正面0.8mに配置
         root.position.set(0, -0.1, -0.8);
         log(`✓ GLB読込完了 meshes=${meshes} tris=${Math.round(tris)} 元高さ=${h.toFixed(2)} scale=${s.toFixed(3)}`);
-        log('操作: 片手=移動 ／ 両手でつまんで回すと回転(背面も)・広げると拡大');
+        log('操作: 片手=移動 ／ 両手でつまみ、片手を手前・片手を奥へ回すと回転(背面も)・広げると拡大');
+        log('※背面まで届かない時は一度離してつまみ直すと続きから回せます');
         btn.disabled=false; btn.textContent='▶ ENTER AR';
       },
       (ev)=>{ if(ev.total){ const p=Math.round(ev.loaded/ev.total*100); if(p>=_dlPct+25||p===100){ _dlPct=p; log('DL '+p+'%'); } } },
