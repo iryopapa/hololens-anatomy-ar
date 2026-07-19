@@ -11,12 +11,11 @@
   <meta name="apple-mobile-web-app-title" content="解剖アトラス" />
   <link rel="apple-touch-icon" href="icon-192.png" />
   <style>
-    :root{ --bg:#141622; --panel:rgba(22,26,42,.94); --line:#2b3350; --txt:#e8ecf7; --sub:#93a0c0; --acc:#3b82f6; --y:#FFE200; }
+    :root{ --bg:#141622; --panel:rgba(22,26,42,.94); --line:#2b3350; --txt:#e8ecf7; --sub:#93a0c0; --acc:#3b82f6; }
     *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
     html,body{ margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--txt);
       font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif; }
     #c{ position:fixed; inset:0; display:block; touch-action:none; }
-    /* トップバー */
     #top{ position:fixed; top:0; left:0; right:0; z-index:20; display:flex; align-items:center; gap:8px;
       padding:calc(env(safe-area-inset-top) + 8px) 12px 8px; background:linear-gradient(#141622ee,#14162200); }
     #top h1{ font-size:16px; margin:0; font-weight:700; flex:0 0 auto; }
@@ -24,8 +23,6 @@
     .btn{ appearance:none; border:1px solid var(--line); background:var(--panel); color:var(--txt);
       font-size:15px; font-weight:600; padding:10px 14px; border-radius:12px; min-height:44px; }
     .btn:active{ background:#20263f; }
-    .btn.acc{ background:var(--acc); border-color:var(--acc); color:#fff; }
-    /* システムパネル */
     #panel{ position:fixed; z-index:19; top:0; bottom:0; left:0; width:min(82vw,340px);
       transform:translateX(-102%); transition:transform .22s ease; background:var(--panel);
       border-right:1px solid var(--line); padding:calc(env(safe-area-inset-top) + 60px) 0 env(safe-area-inset-bottom);
@@ -44,7 +41,6 @@
     .row .nm{ flex:1; font-size:15px; font-weight:600; }
     .row .ct{ font-size:12px; color:var(--sub); }
     .dot{ width:12px; height:12px; border-radius:50%; flex:0 0 auto; }
-    /* 選択カード */
     #sel{ position:fixed; z-index:20; left:12px; right:12px; bottom:calc(env(safe-area-inset-bottom) + 12px);
       background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:14px; display:none; }
     #sel.show{ display:block; }
@@ -53,7 +49,6 @@
     #sel .chip{ display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--sub); margin-top:6px; }
     #sel .acts{ display:flex; gap:8px; margin-top:12px; }
     #sel .acts .btn{ flex:1; font-size:14px; padding:11px; }
-    /* ローディング */
     #load{ position:fixed; inset:0; z-index:30; background:var(--bg); display:flex; flex-direction:column;
       align-items:center; justify-content:center; gap:14px; }
     #load .ring{ width:52px; height:52px; border:5px solid #2b3350; border-top-color:var(--acc);
@@ -62,26 +57,24 @@
     #load .t{ font-size:15px; color:var(--sub); }
     #hint{ position:fixed; z-index:18; left:50%; bottom:calc(env(safe-area-inset-bottom) + 14px);
       transform:translateX(-50%); font-size:12px; color:var(--sub); background:var(--panel);
-      border:1px solid var(--line); border-radius:20px; padding:8px 14px; }
+      border:1px solid var(--line); border-radius:20px; padding:8px 14px; text-align:center; }
     .fadeout{ opacity:0; transition:opacity .5s; pointer-events:none; }
   </style>
 </head>
 <body>
   <canvas id="c"></canvas>
-
   <div id="top">
     <button class="btn" id="menuBtn">☰ 系統</button>
     <h1>解剖アトラス</h1>
     <div class="sp"></div>
+    <button class="btn" id="modelBtn">モデル</button>
     <button class="btn" id="resetBtn">リセット</button>
   </div>
-
   <div id="panel">
     <div class="hd"><b>ボディシステム</b><span class="mini" id="sysCount"></span></div>
     <div class="allnone"><button class="btn" id="allBtn">すべて表示</button><button class="btn" id="noneBtn">すべて非表示</button></div>
     <div id="list"></div>
   </div>
-
   <div id="sel">
     <div class="nm" id="selName">—</div>
     <div class="raw" id="selRaw"></div>
@@ -92,114 +85,130 @@
       <button class="btn" id="closeSel">閉じる</button>
     </div>
   </div>
-
   <div id="hint">1本指=回転 ／ 2本指=移動 ／ ピンチ=拡大 ／ タップ=選択</div>
-
   <div id="load"><div class="ring"></div><div class="t" id="loadT">モデル読み込み中…</div></div>
 
   <script type="importmap">
-  { "imports": {
-      "three": "./vendor/three.module.js",
-      "three/addons/": "./vendor/jsm/"
-  } }
+  { "imports": { "three": "./vendor/three.module.js", "three/addons/": "./vendor/jsm/" } }
   </script>
   <script type="module">
     if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('./sw.js'); } catch(e){} }
-
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
-    // ---- システム分類（優先順＝上から先にマッチ。Blenderで全881メッシュを検証済み: 未分類0） ----
-    const SYSTEMS = [
-      { key:'eye',           label:'眼',              color:'#7ec8ff', re:/cornea|sclera|iris|pupil|_lens_|zonular|ciliary|aqueous_humor|vitreous|retina|macula|fovea|ora_serrata|optic_choroid|optic_disc|optic_nerve|optic_chiasm|optic_tract|optic_radiation|conjunctiva|extraocular|lacrimal|eyelid|eyelash|trabecular_meshwork/i },
-      { key:'skin_fat',      label:'皮膚・脂肪',      color:'#e8c39e', re:/(^|_)skin$|_fat_[lr]$|_fat$|subcutaneous/i },
-      { key:'reproductive',  label:'生殖器',          color:'#f38fb0', re:/uterus|uterine|uterosacral|uterovesical|ovary|ovarian|vagina|cervix|cervico|cervical_os|placenta|amnion|chorionic|basal_plate|mammary|nipple|areola|umbilical|broad_ligament|fallopian|round_ligament_of_uterus|clitoris|labi|cornua|mesosalpinx|mesovarium|lactiferous|suspensory_ligaments/i },
-      { key:'nervous_brain', label:'神経・脳',        color:'#f2d24b', re:/^allen_|spinal_cord|brain|cerebr|cerebell|thalamus|hypothalamus|_gyrus|sulcus_|ventricle|nucleus|nerve|ganglion|pons|medulla_oblongata|midbrain|dura_mater|arachnoid|pia_mater|meninge/i },
-      { key:'muscular',      label:'筋',              color:'#d0463c', re:/rectus_femoris|quadriceps/i },
-      { key:'skeletal',      label:'骨格',            color:'#eae3d2', re:/vertebra|sacrum|coccyx|pelvi|ilium|ischium|pubis|femur|femoral|patella|tibia|fibula|_rib|sternum|clavicle|scapula|humerus|radius|ulna|carpal|metacarpal|phalan|tarsal|metatarsal|skull|mandible|maxilla|cranium|bone|hip_bone|condyle|intercondylar|cruciate|meniscus|articular_cartilage|epicondylar|perichondular|enthesis|ligament_of_knee|anterolateral_ligament|collateral_ligament|trochlear_groove|C[1-8]_segment|first_.*(thoracic|lumbar|sacral)|thoracic_spinal|lumbar_spinal|sacral_spinal|thoracic_vertebra|_segment_of_.*(cervical|thoracic|lumbar|sacral)/i },
-      { key:'cardiovascular',label:'循環器',          color:'#e0524d', re:/artery|arterial|aorta|aortic|vein|venous|vena_cava|cava|atrium|cardiac|coronary|heart|valve|myocard|capillary|vascul|portal|celiac_trunk|pulmonary_trunk|interventricular_septum|marginal_branch|ventricular_branch|_branch$|brachiocephalic|drummond/i },
-      { key:'respiratory',   label:'呼吸器',          color:'#8fd3f4', re:/lung|bronch|trachea|larynx|pharynx|pleura|alveol|nasal|nostril|thyroid_cartilage|cricoid|epiglot|arytenoid_cartilage|corniculate_cartilage|carina|_hilum|hilum_|diaphragm/i },
-      { key:'digestive',     label:'消化器',          color:'#f0a35e', re:/liver|hepatic|hepato|gallbladder|bile|stomach|gastric|duoden|jejun|jejen|ileum|ileoc|colon|caecum|cecum|appendix|rectum|rectal|anus|anal|pancrea|spleen|splenic|esophag|oesophag|salivary|tongue|intestin|sigmoid|omentum|mesentery|mesocolon|peritone|caudate_lobe|quadrate_lobe|porta_hepatis|ligamentum_venosum|falciform_ligament|cystic_duct|uncinate_process|(anterolateral|inferomedial|superomedial|anteroinferior|anterosuperior|posteroinferior|posterosuperior)_segment/i },
-      { key:'urinary',       label:'泌尿器',          color:'#b6e3a8', re:/kidney|renal|ureter|bladder|urethra|urinary|nephron|trigone|calyx|calyc/i },
-      { key:'lymphatic',     label:'リンパ',          color:'#8ad2c0', re:/lymph|thymus|tonsil|^yao_/i },
+    // ===== システム分類（モデル別・優先順で先にマッチ。Blenderで全メッシュ検証済み） =====
+    // 女性 = HuBMAP VH_Female（未分類0）
+    const SYS_FEMALE = [
+      { key:'eye', label:'眼', color:'#7ec8ff', re:/cornea|sclera|iris|pupil|_lens_|zonular|ciliary|aqueous_humor|vitreous|retina|macula|fovea|ora_serrata|optic_choroid|optic_disc|optic_nerve|optic_chiasm|optic_tract|optic_radiation|conjunctiva|extraocular|lacrimal|eyelid|eyelash|trabecular_meshwork/i },
+      { key:'skin_fat', label:'皮膚・脂肪', color:'#e8c39e', re:/(^|_)skin$|_fat_[lr]$|_fat$|subcutaneous/i },
+      { key:'reproductive', label:'生殖器', color:'#f38fb0', re:/uterus|uterine|uterosacral|uterovesical|ovary|ovarian|vagina|cervix|cervico|cervical_os|placenta|amnion|chorionic|basal_plate|mammary|nipple|areola|umbilical|broad_ligament|fallopian|round_ligament_of_uterus|clitoris|labi|cornua|mesosalpinx|mesovarium|lactiferous|suspensory_ligaments/i },
+      { key:'nervous', label:'神経・脳', color:'#f2d24b', re:/^allen_|spinal_cord|brain|cerebr|cerebell|thalamus|hypothalamus|_gyrus|sulcus_|ventricle|nucleus|nerve|ganglion|pons|medulla_oblongata|midbrain|dura_mater|arachnoid|pia_mater|meninge/i },
+      { key:'muscular', label:'筋', color:'#d0463c', re:/rectus_femoris|quadriceps/i },
+      { key:'skeletal', label:'骨格', color:'#eae3d2', re:/vertebra|sacrum|coccyx|pelvi|ilium|ischium|pubis|femur|femoral|patella|tibia|fibula|_rib|sternum|clavicle|scapula|humerus|radius|ulna|carpal|metacarpal|phalan|tarsal|metatarsal|skull|mandible|maxilla|cranium|bone|hip_bone|condyle|intercondylar|cruciate|meniscus|articular_cartilage|epicondylar|perichondular|enthesis|ligament_of_knee|anterolateral_ligament|collateral_ligament|trochlear_groove|C[1-8]_segment|first_.*(thoracic|lumbar|sacral)|thoracic_spinal|lumbar_spinal|sacral_spinal|thoracic_vertebra|_segment_of_.*(cervical|thoracic|lumbar|sacral)/i },
+      { key:'cardiovascular', label:'循環器', color:'#e0524d', re:/artery|arterial|aorta|aortic|vein|venous|vena_cava|cava|atrium|cardiac|coronary|heart|valve|myocard|capillary|vascul|portal|celiac_trunk|pulmonary_trunk|interventricular_septum|marginal_branch|ventricular_branch|_branch$|brachiocephalic|drummond/i },
+      { key:'respiratory', label:'呼吸器', color:'#8fd3f4', re:/lung|bronch|trachea|larynx|pharynx|pleura|alveol|nasal|nostril|thyroid_cartilage|cricoid|epiglot|arytenoid_cartilage|corniculate_cartilage|carina|_hilum|hilum_|diaphragm/i },
+      { key:'digestive', label:'消化器', color:'#f0a35e', re:/liver|hepatic|hepato|gallbladder|bile|stomach|gastric|duoden|jejun|jejen|ileum|ileoc|colon|caecum|cecum|appendix|rectum|rectal|anus|anal|pancrea|spleen|splenic|esophag|oesophag|salivary|tongue|intestin|sigmoid|omentum|mesentery|mesocolon|peritone|caudate_lobe|quadrate_lobe|porta_hepatis|ligamentum_venosum|falciform_ligament|cystic_duct|uncinate_process|(anterolateral|inferomedial|superomedial|anteroinferior|anterosuperior|posteroinferior|posterosuperior)_segment/i },
+      { key:'urinary', label:'泌尿器', color:'#b6e3a8', re:/kidney|renal|ureter|bladder|urethra|urinary|nephron|trigone|calyx|calyc/i },
+      { key:'lymphatic', label:'リンパ', color:'#8ad2c0', re:/lymph|thymus|tonsil|^yao_/i },
+    ];
+    // 男性 = Z-Anatomy 全身（未分類≈6%は other へ）
+    const SYS_MALE = [
+      { key:'eye', label:'眼', color:'#7ec8ff', re:/eyeball|cornea|\biris\b|(^|[ _])lens|zonular|ciliary|aqueous|vitreous|retina|sclera|choroid(?!.*plexus)|optic|extraocular|lacrimal|eyelid|eyelash|conjunctiv|pupil|uvea|palpebr|common tendinous ring/i },
+      { key:'skin', label:'皮膚', color:'#e8c39e', re:/(^|[ _.])skin|epidermis|dermis|subcutaneous|\bnail|hair of|eyebrow/i },
+      { key:'nervous', label:'神経・脳', color:'#f2d24b', re:/nerve|brain|cerebr|cerebell|telencephal|diencephal|encephal|white matter|gray matter|grey matter|gyrus|sulcus|thalamus|hypothalam|spinal cord|ganglion|ganglia|plexus|pons|medulla oblongata|midbrain|cortex|nucleus|dura mater|arachnoid|pia mater|meninge|cauda equina|conus medullaris|amygdaloid|commissure|vermis|limbic|fornix|insula|hippocamp|colliculus|peduncle|lemniscus|pallidus|putamen|caudate|claustrum|callosum|capsule\b|flocculus|culmen|declive|dentate|substantia|tegmentum|operculum|cingulate|uncus|lobule|ventricle of|lateral ventricle|third ventricle|fourth ventricle|choroid plexus|olfactory|pyramid|tonsil of cerebellum|geniculate|cuneus|habenula|fasciculus|proprius|intermediate substance/i },
+      { key:'muscular', label:'筋', color:'#d0463c', re:/muscle|iliotibial tract|tendon|aponeurosis|\bdiaphragm\b|fascia|intermuscular septum|intercostal membrane|linea alba|sphincter|abductor|adductor|flexor|extensor|pronator|supinator|\brotator|levator|depressor|tensor|opponens|constrictor|dilator|gracilis|sartorius|soleus|gastrocnemius|plantaris|popliteus|pectineus|piriformis|gemellus|obturator|quadratus|\bbiceps|triceps|brachialis|brachioradialis|anconeus|deltoid|trapezius|rhomboid|serratus|subscapularis|supraspinatus|infraspinatus|\bteres|latissimus|pectoralis|masseter|temporalis|pterygoid|buccinator|bucinator|orbicularis|zygomaticus|risorius|platysma|mentalis|nasalis|corrugator|procerus|occipitofrontalis|frontalis|occipitalis|sternocleidomastoid|scalene|omohyoid|sternohyoid|sternothyroid|thyrohyoid|digastric|mylohyoid|geniohyoid|stylohyoid|genioglossus|hyoglossus|styloglossus|palatoglossus|iliacus|psoas|gluteus|semitendinosus|semimembranosus|vastus|lumbrical|hypothenar|thenar|palmaris|coracobrachialis|stapedius|tensor tympani|longissimus|spinalis|iliocostalis|multifidus|splenius|erector spinae|coccygeus|puborectalis|pubococcygeus|iliococcygeus|cremaster|dartos|articularis/i },
+      { key:'skeletal', label:'骨格', color:'#eae3d2', re:/\bbone\b|vertebra|\brib\b|sternum|clavicle|scapula|humerus|radius\b|\bulna|carpal|metacarpal|phalan|femur|patella|tibia|fibula|tarsal|metatarsal|skull|cranium|mandible|maxilla|hip bone|ilium|ischium|pubis|sacrum|coccyx|costal cartilage|meniscus|intervertebral|ligament|bursa|joint|articular|cruciate|epicondyl|condyle|malleolus|calcaneus|\btalus|navicular|cuboid|cuneiform|hyoid|ossicle|malleus|incus|stapes|labrum|symphysis|\batlas|\baxis\b|foramen|sesamoid|epiphys|diaphysis|zygomatic|temporal bone|frontal bone|parietal|occipital|ethmoid|sphenoid|nasal bone|lacrimal bone|vomer|palatine|arch of|interosseous membrane|process$|tubercle|tuberosity|trochlea|crest|ramus|periosteum/i },
+      { key:'cardiovascular', label:'循環器', color:'#e0524d', re:/artery|arterial|aorta|aortic|\bvein\b|venous|vena cava|\bcava\b|heart|atrium|left ventricle|right ventricle|ventricle of heart|cardiac|myocard|pericard|coronary|valve|capillary|pulmonary trunk|brachiocephalic|carotid|jugular|portal vein|truncus|cavernous sinus|sagittal sinus|sigmoid sinus|transverse sinus|straight sinus|confluence of sinuses/i },
+      { key:'respiratory', label:'呼吸器', color:'#8fd3f4', re:/lung|bronch|trachea|larynx|laryng|pharynx|pharyng|pleura|alveol|nasal cav|nostril|paranasal|epiglot|vocal|cricoid|arytenoid|thyroid cartilage|corniculate|concha|choana|glottis|auditory tube|nose/i },
+      { key:'digestive', label:'消化器', color:'#f0a35e', re:/liver|hepatic|hepato|gallbladder|bile|stomach|gastric|duoden|jejun|ileum|ileoc|colon|caecum|cecum|appendic|appendix|rectum|anus|anal canal|pancrea|esophag|oesophag|salivary|parotid|submandibular|sublingual|tongue|tooth|teeth|canine|premolar|incisor|molar|gingiva|\blip\b|palate|intestin|sigmoid colon|omentum|mesentery|mesocolon|peritone|lobe of liver|porta hepatis/i },
+      { key:'urinary', label:'泌尿器', color:'#b6e3a8', re:/kidney|renal|ureter|bladder|urethra|urinary|nephron|trigone|calyx|calyc|urachus/i },
+      { key:'reproductive', label:'生殖器', color:'#f38fb0', re:/testis|testicular|epididymis|penis|penile|prostate|scrotum|ductus deferens|vas deferens|seminal|spermatic|glans|corpus cavernosum|corpus spongiosum|bulbourethral|ejaculatory|tunica/i },
+      { key:'lymphatic', label:'リンパ', color:'#8ad2c0', re:/lymph|thymus|tonsil|spleen|\bnode\b|nodes\b|cisterna chyli|thoracic duct/i },
+      { key:'endocrine', label:'内分泌', color:'#c9a0ff', re:/thyroid gland|parathyroid|adrenal|suprarenal|pituitary|hypophysis|pineal|islet/i },
+      { key:'surface', label:'表面・領域', color:'#9aa4bf', off:true, re:/region of|region\b|\bline\b|\bplane\b|abduction|adduction|flexion|extension|rotation|movement|auricle|antihelix|antitragus|tragus|helix|concha of|cochlea|vestibule|semicircular|surface|\bborder\b|\bmargin\b|apex of|prominence|dorsum of|eminence/i },
     ];
     const OTHER = { key:'other', label:'その他', color:'#9aa4bf' };
-    function classify(name){ for(const s of SYSTEMS){ if(s.re.test(name)) return s.key; } return 'other'; }
-    const sysByKey = Object.fromEntries([...SYSTEMS, OTHER].map(s=>[s.key,s]));
-    // 既定で非表示にする構造（へその緒＝臍帯複合・胎盤＝胎盤膜/血管）。HoloLensモデルと同じ扱い。
-    const DEFAULT_HIDE = /umbilical_cord|umbilical_artery|umbilical_vein|placenta|amnion|chorionic_plate|basal_plate/i;
 
-    // ---- Three.js ----
+    const MODELS = [
+      { key:'female', label:'♀ 女性(臓器)', url:'./vendor/anatomy.glb', systems:SYS_FEMALE,
+        defaultHide:/umbilical_cord|umbilical_artery|umbilical_vein|placenta|amnion|chorionic_plate|basal_plate/i },
+      { key:'male', label:'♂ 男性(全身)', url:'./vendor/zbody.glb', systems:SYS_MALE, defaultHide:null },
+    ];
+    let curIdx = 0, curModel = MODELS[0];
+    let SYSTEMS = curModel.systems, DEFAULT_HIDE = curModel.defaultHide;
+    let sysByKey = Object.fromEntries([...SYSTEMS, OTHER].map(s=>[s.key,s]));
+    function classify(name){ for(const s of SYSTEMS){ if(s.re.test(name)) return s.key; } return 'other'; }
+
+    // ===== Three.js =====
     const canvas = document.getElementById('c');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
     renderer.setPixelRatio(Math.min(devicePixelRatio||1, 2));
     renderer.setSize(innerWidth, innerHeight);
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x141622);
+    const scene = new THREE.Scene(); scene.background = new THREE.Color(0x141622);
     const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.01, 100);
     camera.position.set(0, 0, 2);
     scene.add(new THREE.HemisphereLight(0xffffff, 0x2a3350, 1.4));
     scene.add(new THREE.AmbientLight(0xffffff, 0.35));
     const d1 = new THREE.DirectionalLight(0xffffff, 1.4); d1.position.set(1,1.5,2); scene.add(d1);
     const d2 = new THREE.DirectionalLight(0xbfd0ff, 0.8); d2.position.set(-1,0.5,-1.5); scene.add(d2);
-
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true; controls.dampingFactor = 0.08;
-    controls.rotateSpeed = 0.9; controls.panSpeed = 0.8;
+    controls.enableDamping = true; controls.dampingFactor = 0.08; controls.rotateSpeed = 0.9; controls.panSpeed = 0.8;
     controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
     const root = new THREE.Group(); scene.add(root);
-    const pickables = [];                 // 全メッシュ
-    const bySystem = {};                  // key -> [mesh]
-    let selected = null, isolated = false;
-
-    const draco = new DRACOLoader();
-    draco.setDecoderPath('./vendor/draco/');
-    const loader = new GLTFLoader(); loader.setDRACOLoader(draco);
-
-    const loadEl = document.getElementById('load'), loadT = document.getElementById('loadT');
-    loader.load('./vendor/anatomy.glb',
-      (gltf) => {
-        const model = gltf.scene;
-        model.traverse((o) => {
-          if (!o.isMesh) return;
-          // マテリアルをメッシュ毎に複製（ハイライトを他へ波及させない）＋両面
-          const mats = Array.isArray(o.material) ? o.material : [o.material];
-          o.material = (Array.isArray(o.material) ? mats.map(m=>m.clone()) : mats[0].clone());
-          const first = Array.isArray(o.material) ? o.material[0] : o.material;
-          first.side = THREE.DoubleSide;
-          o.userData.sys = classify(o.name);
-          if (DEFAULT_HIDE.test(o.name)) o.visible = false;   // へその緒・胎盤は既定で隠す
-          o.userData.baseEmissive = (first.emissive ? first.emissive.clone() : new THREE.Color(0x000000));
-          o.userData.baseEI = (first.emissiveIntensity ?? 1);
-          pickables.push(o);
-          (bySystem[o.userData.sys] ||= []).push(o);
-        });
-        // 中心化＋カメラフィット
-        const box = new THREE.Box3().setFromObject(model);
-        const center = box.getCenter(new THREE.Vector3());
-        const size = box.getSize(new THREE.Vector3());
-        model.position.sub(center);
-        root.add(model);
-        const radius = Math.max(size.x, size.y, size.z) * 0.5;
-        camera.near = radius/100; camera.far = radius*100; camera.updateProjectionMatrix();
-        const dist = radius / Math.tan(THREE.MathUtils.degToRad(camera.fov*0.5)) * 1.5;
-        HOME.pos.set(0, size.y*0.05, dist); HOME.tgt.set(0,0,0);
-        controls.minDistance = radius*0.15; controls.maxDistance = radius*10;
-        goHome();
-        buildTree();
-        loadEl.classList.add('fadeout'); setTimeout(()=>loadEl.remove(), 550);
-      },
-      (ev) => { if (ev.total) loadT.textContent = 'モデル読み込み中… ' + Math.round(ev.loaded/ev.total*100) + '%'; },
-      (err) => { loadT.textContent = '読み込み失敗: ' + (err.message||err); }
-    );
-
+    const pickables = []; const bySystem = {}; let selected = null;
     const HOME = { pos:new THREE.Vector3(), tgt:new THREE.Vector3() };
     function goHome(){ camera.position.copy(HOME.pos); controls.target.copy(HOME.tgt); controls.update(); }
 
-    // ---- システムツリー ----
+    const draco = new DRACOLoader(); draco.setDecoderPath('./vendor/draco/');
+    const loader = new GLTFLoader(); loader.setDRACOLoader(draco);
+    const loadEl = document.getElementById('load'), loadT = document.getElementById('loadT');
+
+    function disposeObj(obj){
+      obj.traverse((o)=>{ if(o.isMesh){ o.geometry?.dispose(); const m=Array.isArray(o.material)?o.material:[o.material]; m.forEach(x=>x?.dispose()); } });
+    }
+    function loadModel(def){
+      curModel = def; SYSTEMS = def.systems; DEFAULT_HIDE = def.defaultHide;
+      sysByKey = Object.fromEntries([...SYSTEMS, OTHER].map(s=>[s.key,s]));
+      closeSel();
+      while(root.children.length){ const m=root.children[0]; root.remove(m); disposeObj(m); }
+      pickables.length = 0; for(const k in bySystem) delete bySystem[k];
+      document.getElementById('modelBtn').textContent = def.label;
+      loadEl.style.display='flex'; loadEl.classList.remove('fadeout'); loadT.textContent='モデル読み込み中…';
+      loader.load(def.url,
+        (gltf)=>{
+          const model = gltf.scene;
+          model.traverse((o)=>{
+            if (!o.isMesh) return;
+            o.material = Array.isArray(o.material) ? o.material.map(m=>m.clone()) : o.material.clone();
+            const first = Array.isArray(o.material) ? o.material[0] : o.material;
+            first.side = THREE.DoubleSide;
+            o.userData.sys = classify(o.name);
+            if (DEFAULT_HIDE && DEFAULT_HIDE.test(o.name)) o.visible = false;
+            o.userData.baseEmissive = (first.emissive ? first.emissive.clone() : new THREE.Color(0x000000));
+            o.userData.baseEI = (first.emissiveIntensity ?? 1);
+            pickables.push(o);
+            (bySystem[o.userData.sys] ||= []).push(o);
+          });
+          const box = new THREE.Box3().setFromObject(model);
+          const center = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+          model.position.sub(center); root.add(model);
+          const radius = Math.max(size.x, size.y, size.z) * 0.5;
+          camera.near = radius/100; camera.far = radius*100; camera.updateProjectionMatrix();
+          const dist = radius / Math.tan(THREE.MathUtils.degToRad(camera.fov*0.5)) * 1.5;
+          HOME.pos.set(0, size.y*0.05, dist); HOME.tgt.set(0,0,0);
+          controls.minDistance = radius*0.15; controls.maxDistance = radius*10; goHome();
+          buildTree();
+          loadEl.classList.add('fadeout'); setTimeout(()=>{ loadEl.style.display='none'; }, 550);
+        },
+        (ev)=>{ if (ev.total) loadT.textContent = 'モデル読み込み中… ' + Math.round(ev.loaded/ev.total*100) + '%'; },
+        (err)=>{ loadT.textContent = '読み込み失敗: ' + (err.message||err); }
+      );
+    }
+
+    // ===== システムツリー =====
     const listEl = document.getElementById('list');
     function buildTree(){
       const present = SYSTEMS.filter(s => (bySystem[s.key]||[]).length);
@@ -208,10 +217,12 @@
       listEl.innerHTML = '';
       for (const s of present){
         const meshes = bySystem[s.key] || [];
+        const startOn = !s.off;
+        if (!startOn) for (const m of meshes) m.visible = false;   // 既定オフ(表面/領域など)
         const row = document.createElement('div');
-        row.className = 'row on';
+        row.className = 'row' + (startOn ? ' on' : '');
         row.innerHTML = `<span class="dot" style="background:${s.color}"></span>
-          <span class="sw">✓</span><span class="nm">${s.label}</span><span class="ct">${meshes.length}</span>`;
+          <span class="sw">${startOn?'✓':''}</span><span class="nm">${s.label}</span><span class="ct">${meshes.length}</span>`;
         row.addEventListener('click', () => {
           const on = !row.classList.contains('on');
           row.classList.toggle('on', on);
@@ -224,12 +235,11 @@
     }
     function setAll(v){
       for (const m of pickables) m.visible = v;
-      isolated = false;
       for (const row of listEl.querySelectorAll('.row')){ row.classList.toggle('on', v); row.querySelector('.sw').textContent = v?'✓':''; }
       if (!v) closeSel();
     }
 
-    // ---- タップ選択（ドラッグと区別） ----
+    // ===== タップ選択（ドラッグと区別） =====
     const raycaster = new THREE.Raycaster(), ptr = new THREE.Vector2();
     let down = null, activePointers = 0;
     canvas.addEventListener('pointerdown', (e) => { activePointers++; down = (activePointers===1) ? {x:e.clientX,y:e.clientY,t:performance.now()} : null; });
@@ -237,32 +247,31 @@
     canvas.addEventListener('pointerup', (e) => {
       const wasSingle = down && activePointers===1;
       activePointers = Math.max(0, activePointers-1);
-      if (wasSingle){
-        const dist = Math.hypot(e.clientX-down.x, e.clientY-down.y);
-        if (dist < 9 && performance.now()-down.t < 450) pick(e.clientX, e.clientY);
-      }
+      if (wasSingle && Math.hypot(e.clientX-down.x, e.clientY-down.y) < 9 && performance.now()-down.t < 450) pick(e.clientX, e.clientY);
       down = null;
     });
     function pick(cx, cy){
       const r = canvas.getBoundingClientRect();
       ptr.x = ((cx-r.left)/r.width)*2 - 1; ptr.y = -((cy-r.top)/r.height)*2 + 1;
       raycaster.setFromCamera(ptr, camera);
-      const hits = raycaster.intersectObjects(pickables, false);  // Raycasterは非表示を除外
+      const hits = raycaster.intersectObjects(pickables, false);
       if (hits.length) select(hits[0].object); else closeSel();
     }
 
-    // ---- 選択・ハイライト・カード ----
+    // ===== 選択・ハイライト・カード =====
     const selEl = document.getElementById('sel');
     function matList(o){ return Array.isArray(o.material) ? o.material : [o.material]; }
     function highlight(o, on){
       for (const m of matList(o)){
+        if (!m || !m.emissive) continue;
         if (on){ m.emissive.setHex(0x2b6cff); m.emissiveIntensity = 0.7; }
         else { m.emissive.copy(o.userData.baseEmissive); m.emissiveIntensity = o.userData.baseEI; }
       }
     }
     function humanize(raw){
-      let s = raw.replace(/^VH_F_/,'').replace(/^Allen_/,'').replace(/^Yao_/,'').replace(/_/g,' ').trim();
-      s = s.replace(/\bleft\b/ig,'左').replace(/\bright\b/ig,'右').replace(/\s([lr])$/i,(m,p)=> p.toLowerCase()==='l'?' (左)':' (右)');
+      let s = raw.replace(/^VH_F_/,'').replace(/^Allen_/,'').replace(/^Yao_/,'').replace(/\.(l|r|el|er|ol|or|j|i)$/i,' $1')
+        .replace(/[_]/g,' ').trim();
+      s = s.replace(/\bleft\b/ig,'左').replace(/\bright\b/ig,'右').replace(/\s\.l$/i,' (左)').replace(/\s\.r$/i,' (右)').replace(/\s(l|r)$/i,(m,p)=> p.toLowerCase()==='l'?' (左)':' (右)');
       return s.charAt(0).toUpperCase() + s.slice(1);
     }
     function select(o){
@@ -278,27 +287,24 @@
 
     document.getElementById('hideBtn').addEventListener('click', () => { if (selected){ selected.visible = false; closeSel(); } });
     document.getElementById('isoBtn').addEventListener('click', () => {
-      if (!selected) return;
-      const only = selected;
+      if (!selected) return; const only = selected;
       for (const m of pickables) m.visible = (m === only);
-      isolated = true;
       for (const row of listEl.querySelectorAll('.row')){ row.classList.remove('on'); row.querySelector('.sw').textContent=''; }
     });
     document.getElementById('closeSel').addEventListener('click', closeSel);
 
-    // ---- UI ボタン ----
     const panel = document.getElementById('panel');
     document.getElementById('menuBtn').addEventListener('click', () => panel.classList.toggle('open'));
-    document.getElementById('resetBtn').addEventListener('click', () => { setAll(true); closeSel(); goHome(); });
+    document.getElementById('resetBtn').addEventListener('click', () => { setAll(true); buildTree(); closeSel(); goHome(); });
     document.getElementById('allBtn').addEventListener('click', () => setAll(true));
     document.getElementById('noneBtn').addEventListener('click', () => setAll(false));
+    document.getElementById('modelBtn').addEventListener('click', () => { curIdx = (curIdx+1) % MODELS.length; loadModel(MODELS[curIdx]); });
     setTimeout(()=>document.getElementById('hint').classList.add('fadeout'), 6000);
 
-    addEventListener('resize', () => {
-      camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-      renderer.setSize(innerWidth, innerHeight);
-    });
+    addEventListener('resize', () => { camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
     renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+
+    loadModel(MODELS[0]);
   </script>
 </body>
 </html>
