@@ -134,7 +134,7 @@
     const MODELS = [
       { key:'female', label:'♀ 女性(臓器)', url:'./vendor/anatomy.glb', systems:SYS_FEMALE,
         defaultHide:/umbilical_cord|umbilical_artery|umbilical_vein|placenta|amnion|chorionic_plate|basal_plate/i },
-      { key:'male', label:'♂ 男性(全身)', url:'./vendor/zbody.glb', systems:SYS_MALE, defaultHide:null },
+      { key:'male', label:'♂ 男性(全身)', url:'./vendor/zbody.glb', systems:SYS_MALE, defaultHide:null, colorBySystem:true },
     ];
     let curIdx = 0, curModel = MODELS[0];
     let SYSTEMS = curModel.systems, DEFAULT_HIDE = curModel.defaultHide;
@@ -187,6 +187,13 @@
             first.side = THREE.DoubleSide;
             o.userData.sys = classify(o.name);
             if (DEFAULT_HIDE && DEFAULT_HIDE.test(o.name)) o.visible = false;
+            if (curModel.colorBySystem){   // Z-Anatomyは白のっぺり材質が多い→システム色で塗り分け
+              const sc = (sysByKey[o.userData.sys]||OTHER).color;
+              for (const m of (Array.isArray(o.material)?o.material:[o.material])){
+                if(!m) continue; if(m.color) m.color.set(sc); if(m.emissive) m.emissive.setHex(0x000000);
+                if('metalness' in m) m.metalness=0; if('roughness' in m) m.roughness=0.85;
+              }
+            }
             o.userData.baseEmissive = (first.emissive ? first.emissive.clone() : new THREE.Color(0x000000));
             o.userData.baseEI = (first.emissiveIntensity ?? 1);
             pickables.push(o);
