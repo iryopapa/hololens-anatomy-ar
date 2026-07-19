@@ -128,6 +128,8 @@
     const OTHER = { key:'other', label:'その他', color:'#9aa4bf' };
     function classify(name){ for(const s of SYSTEMS){ if(s.re.test(name)) return s.key; } return 'other'; }
     const sysByKey = Object.fromEntries([...SYSTEMS, OTHER].map(s=>[s.key,s]));
+    // 既定で非表示にする構造（へその緒＝臍帯複合・胎盤＝胎盤膜/血管）。HoloLensモデルと同じ扱い。
+    const DEFAULT_HIDE = /umbilical_cord|umbilical_artery|umbilical_vein|placenta|amnion|chorionic_plate|basal_plate/i;
 
     // ---- Three.js ----
     const canvas = document.getElementById('c');
@@ -169,6 +171,7 @@
           const first = Array.isArray(o.material) ? o.material[0] : o.material;
           first.side = THREE.DoubleSide;
           o.userData.sys = classify(o.name);
+          if (DEFAULT_HIDE.test(o.name)) o.visible = false;   // へその緒・胎盤は既定で隠す
           o.userData.baseEmissive = (first.emissive ? first.emissive.clone() : new THREE.Color(0x000000));
           o.userData.baseEI = (first.emissiveIntensity ?? 1);
           pickables.push(o);
