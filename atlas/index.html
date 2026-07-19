@@ -257,7 +257,11 @@
     canvas.addEventListener('pointerup', (e) => {
       const wasSingle = down && activePointers===1;
       activePointers = Math.max(0, activePointers-1);
-      if (wasSingle && Math.hypot(e.clientX-down.x, e.clientY-down.y) < 9 && performance.now()-down.t < 450) pick(e.clientX, e.clientY);
+      if (wasSingle){
+        const mv = Math.hypot(e.clientX-down.x, e.clientY-down.y), dt = performance.now()-down.t;
+        console.log('[DIAG up] move='+mv.toFixed(1)+' dt='+dt.toFixed(0)+' tap='+(mv<12 && dt<500));
+        if (mv < 12 && dt < 500) pick(e.clientX, e.clientY);
+      }
       down = null;
     });
     function pick(cx, cy){
@@ -265,6 +269,7 @@
       ptr.x = ((cx-r.left)/r.width)*2 - 1; ptr.y = -((cy-r.top)/r.height)*2 + 1;
       raycaster.setFromCamera(ptr, camera);
       const hits = raycaster.intersectObjects(pickables, false);
+      console.log('[DIAG pick] dissect='+dissect+' pickables='+pickables.length+' visible='+pickables.filter(m=>m.visible).length+' hits='+hits.length+(hits[0]?(' first='+hits[0].object.name):''));
       if (!hits.length){ closeSel(); return; }
       if (dissect){ hits[0].object.visible = false; }   // 解剖モード: タップで剥がす（皮膚→筋→骨）
       else select(hits[0].object);
