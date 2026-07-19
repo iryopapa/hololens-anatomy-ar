@@ -83,9 +83,10 @@
     loader.load(GLB,
       (gltf)=>{
         const model=gltf.scene;
-        // 非表示リスト: 皮膚/脂肪(当初要件=皮膚なし)・乳房(乳腺/乳頭/乳輪)・胎盤血管。
-        // 注: Allen_mammillary_* は脳の乳頭体なので mammary(乳腺)のみ対象にして誤爆を防ぐ。
-        const HIDE=/(^|_)skin$|_fat_[LR]$|mammary_lobes|_nipple_|_areola|placenta/i;
+        // 非表示: 乳房(乳腺/乳頭/乳輪) と 臍帯複合(へその緒=umbilical_cord・臍帯動静脈)。
+        //   臍帯は前腹壁から手前に垂れて内臓を隠すため除外。皮膚・脂肪・胎盤血管は表示。
+        // 注: Allen_mammillary_*=脳の乳頭体・*_spinal_cord_*=脊髄 は対象外（mammary/umbilical_cordのみ）。
+        const HIDE=/mammary_lobes|_nipple_|_areola|umbilical_cord|umbilical_artery|umbilical_vein/i;
         let tris=0, meshes=0, hidden=0; const hiddenNames=[];
         model.traverse(o=>{
           if(o.isMesh){
