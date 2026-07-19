@@ -319,7 +319,7 @@
       const r = canvas.getBoundingClientRect();
       ptr.x = ((cx-r.left)/r.width)*2 - 1; ptr.y = -((cy-r.top)/r.height)*2 + 1;
       raycaster.setFromCamera(ptr, camera);
-      const hits = raycaster.intersectObjects(pickables, false);
+      const hits = raycaster.intersectObjects(pickables, false).filter(h => h.object.visible);  // Raycasterは非表示を無視するので明示的に除外
       if (!hits.length){ closeSel(); return; }
       if (dissect){ hits[0].object.visible = false; }   // 解剖モード: タップで剥がす（皮膚→筋→骨）
       else select(hits[0].object);
