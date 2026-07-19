@@ -137,12 +137,13 @@
     const MODELS = [
       { key:'female', label:'♀ 女性(臓器)', url:'./vendor/anatomy.glb', systems:SYS_FEMALE,
         defaultHide:/umbilical_cord|umbilical_artery|umbilical_vein|placenta|amnion|chorionic_plate|basal_plate|mammary_lobes|_nipple_|_areola|_fat_[lr]$/i },
-      { key:'male', label:'♂ 男性(全身)', url:'./vendor/zbody.glb', systems:SYS_MALE, defaultHide:null, colorBySystem:true },
+      { key:'male', label:'♂ 男性(全身)', url:'./vendor/zbody.glb', systems:SYS_MALE, defaultHide:null, colorBySystem:true, norm:true },
     ];
     let curIdx = 0, curModel = MODELS[0];
     let SYSTEMS = curModel.systems, DEFAULT_HIDE = curModel.defaultHide;
     let sysByKey = Object.fromEntries([...SYSTEMS, OTHER].map(s=>[s.key,s]));
-    function classify(name){ for(const s of SYSTEMS){ if(s.re.test(name)) return s.key; } return 'other'; }
+    // Z-Anatomy(男性)はglTF書き出しで空白→_/.→_に変換される→スペースへ正規化してから分類
+    function classify(name){ const n = curModel.norm ? name.replace(/[_.]/g,' ') : name; for(const s of SYSTEMS){ if(s.re.test(n)) return s.key; } return 'other'; }
 
     // ===== Three.js =====
     const canvas = document.getElementById('c');
@@ -259,7 +260,6 @@
       activePointers = Math.max(0, activePointers-1);
       if (wasSingle){
         const mv = Math.hypot(e.clientX-down.x, e.clientY-down.y), dt = performance.now()-down.t;
-        console.log('[DIAG up] move='+mv.toFixed(1)+' dt='+dt.toFixed(0)+' tap='+(mv<12 && dt<500));
         if (mv < 12 && dt < 500) pick(e.clientX, e.clientY);
       }
       down = null;
@@ -269,7 +269,6 @@
       ptr.x = ((cx-r.left)/r.width)*2 - 1; ptr.y = -((cy-r.top)/r.height)*2 + 1;
       raycaster.setFromCamera(ptr, camera);
       const hits = raycaster.intersectObjects(pickables, false);
-      console.log('[DIAG pick] dissect='+dissect+' pickables='+pickables.length+' visible='+pickables.filter(m=>m.visible).length+' hits='+hits.length+(hits[0]?(' first='+hits[0].object.name):''));
       if (!hits.length){ closeSel(); return; }
       if (dissect){ hits[0].object.visible = false; }   // 解剖モード: タップで剥がす（皮膚→筋→骨）
       else select(hits[0].object);
