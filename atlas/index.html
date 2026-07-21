@@ -30,6 +30,12 @@
       display:none; background:rgba(0,0,0,.68); color:#fff; font-size:15px; font-weight:700;
       padding:14px 20px; border-radius:14px; pointer-events:none; }
     body.marker-lost #markerMsg{ display:block; }
+    /* 認識できているか・寄りすぎていないかを常に出す（模型が視界外でも状況が分かるように） */
+    #markerHud{ position:fixed; z-index:21; left:50%; transform:translateX(-50%);
+      bottom:calc(env(safe-area-inset-bottom) + 116px); display:none;
+      font-size:12px; font-weight:700; padding:7px 14px; border-radius:20px;
+      background:rgba(0,0,0,.62); color:#fff; white-space:nowrap; pointer-events:none; }
+    body.marker-on #markerHud{ display:block; }
     #top{ position:fixed; top:0; left:0; right:0; z-index:20; display:flex; align-items:center; gap:8px;
       padding:calc(env(safe-area-inset-top) + 8px) 12px 8px; background:linear-gradient(#141622ee,#14162200); }
     #top h1{ font-size:16px; margin:0; font-weight:700; flex:0 0 auto; }
@@ -109,6 +115,7 @@
     <button class="btn" id="arExitBtn">AR終了</button>
   </div>
   <div id="markerMsg">マーカーを映してください</div>
+  <div id="markerHud"></div>
   <div id="top">
     <button class="btn" id="menuBtn">☰ 系統</button>
     <h1>解剖アトラス</h1>
@@ -547,7 +554,11 @@
     // 実機で調整できるよう URL で上書きできる: ?marker=0.16&model=0.5&arres=1280
     const _q = new URLSearchParams(location.search);
     const MARKER_SIZE_M = Math.max(0.02, parseFloat(_q.get('marker')) || 0.16);   // マーカー一辺(m)
-    const MODEL_ON_MARKER_M = Math.max(0.05, parseFloat(_q.get('model')) || 0.50); // 模型の高さ(m)
+    // 模型はマーカーに比例させる。固定値にするとマーカーを小さく刷ったとき模型だけ巨大になり、
+    // 全体を見るために離れる→マーカーが認識距離から外れる、あるいは近づく→模型の内部に入る、
+    // というどちらにも詰む状態になる（16cmマーカーに50cm模型で実際に踏んだ）。
+    // 既定はマーカーの2倍。16cm→32cm、25cm→50cm。?model=0.5 で実寸指定も可。
+    const MODEL_ON_MARKER_M = Math.max(0.05, parseFloat(_q.get('model')) || MARKER_SIZE_M * 2);
     // マーカーが小さいほど認識できる距離が縮む（経験則で一辺の6〜7倍）。18cmだと約1.1〜1.3m。
     // 検出解像度を上げると範囲と安定性が稼げるが、その分CPUを使う。
     const AR_RES_W = Math.max(320, parseInt(_q.get('arres')) || 1280);
@@ -619,13 +630,14 @@
       document.body.classList.add('marker-lost');
       arFrames = 0; arHits = 0;
       updateMarkerMsg();
+      document.body.classList.add('marker-on');
       markerBtn.classList.add('acc');
     }
 
     function exitMarker(){
       markerMode = false;
       arMarker = null; arCtx = null;
-      document.body.classList.remove('marker-lost');
+      document.body.classList.remove('marker-lost', 'marker-on');
       root.visible = true;
       markerBtn.classList.remove('acc');
       root.scale.setScalar(1);
@@ -647,6 +659,21 @@
       root.visible = seen;
       document.body.classList.toggle('marker-lost', !seen);
       if (!seen && arFrames % 15 === 0) updateMarkerMsg();   // 診断値を時々更新
+      if (arFrames % 10 === 0) updateMarkerHud(seen);
+    }
+
+    // 認識できているか、寄りすぎ／離れすぎでないかを常時表示する。
+    // 模型が視界の外にあると「動いていない」と誤解するため、状況だけは必ず見えるようにする。
+    function updateMarkerHud(seen){
+      const hud = document.getElementById('markerHud');
+      if (!seen){ hud.textContent = '未認識 ' + Math.round(arHits/Math.max(1,arFrames)*100) + '%'; return; }
+      const dUnits = camera.position.length();          // マーカー一辺を1とした距離
+      const dCm = Math.round(dUnits * MARKER_SIZE_M * 100);
+      const 全体が見える距離cm = Math.round(MODEL_ON_MARKER_M * 1.2 * 100);
+      let advice = '';
+      if (dCm < 全体が見える距離cm * 0.6) advice = ' ・もっと離れて';
+      else if (dCm > MARKER_SIZE_M * 700) advice = ' ・近づいて';
+      hud.textContent = `認識中 ・ 距離 約${dCm}cm（全体が見えるのは約${全体が見える距離cm}cm）${advice}`;
     }
 
     // 認識しないとき、原因を遠隔で切り分けるための表示

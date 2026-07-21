@@ -1,5 +1,5 @@
 // 解剖アトラス PWA サービスワーカー（オフライン対応・アプリシェル＋モデルを事前キャッシュ）
-const CACHE = 'atlas-v23';
+const CACHE = 'atlas-v24';
 const CORE = [
   './',
   './index.html',
