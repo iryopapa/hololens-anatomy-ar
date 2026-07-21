@@ -1,5 +1,5 @@
 // 解剖アトラス PWA サービスワーカー（オフライン対応・アプリシェル＋モデルを事前キャッシュ）
-const CACHE = 'atlas-v15';
+const CACHE = 'atlas-v16';
 const CORE = [
   './',
   './index.html',
@@ -35,7 +35,11 @@ self.addEventListener('activate', (e) => {
 // 同一オリジンGETはキャッシュ優先→なければ取得してキャッシュ。
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  const u = new URL(req.url);
+  if (req.method !== 'GET' || u.origin !== self.location.origin) return;
+  // 実物大AR用のUSDZ(7MB)はキャッシュしない。AR Quick Look はシステム側で取得するうえ、
+  // 端末のストレージを二重に食うだけになる。
+  if (u.pathname.endsWith('.usdz')) return;
   e.respondWith(
     caches.match(req).then((hit) => hit || fetch(req).then((res) => {
       const copy = res.clone();
