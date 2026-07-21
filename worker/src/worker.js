@@ -82,9 +82,17 @@ export class Room {
       await this.ctx.storage.delete('presenter');
       this.broadcast(JSON.stringify({ k: 'role', presenter: null }));
     }
+    // サーバ側からも閉じてクローズ手順を完了させる。これを省くとクライアントは
+    // CLOSING のまま止まり onclose が発火しない＝自動再接続が働かない。
+    // HoloLens 2 はブラウザが頻繁に接続を切るので、ここが抜けると学生の端末が
+    // 黙って追従を止めたまま復帰しなくなる。
+    // ⚠️ 相手のコードをそのまま返さないこと。コード無しの切断は 1005、異常切断は 1006 で
+    //    報告されるが、この2つは「送ってはいけない予約コード」なので close() が例外を投げ、
+    //    catch に飲まれて再び手順が完了しなくなる。常に 1000 で閉じる。
+    try { ws.close(1000, 'peer closed'); } catch {}
   }
 
-  async webSocketError(ws) { await this.webSocketClose(ws); }
+  async webSocketError(ws) { try { ws.close(1011, 'error'); } catch {} }
 }
 
 export default {

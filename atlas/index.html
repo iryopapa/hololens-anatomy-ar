@@ -300,6 +300,7 @@
           for (const s of SYSTEMS){ if(s.off){ for(const m of (bySystem[s.key]||[])) m.visible=false; } }  // 既定オフ系統
           buildTree();
           pickables.forEach(m=>m.userData.defVis = m.visible);   // 既定の可視状態を記録（検索/リセット復帰用）
+          if (pendingState){ try { applyState(pendingState); } catch(e){} }   // 読込前に届いた先生の表示状態
           loadEl.classList.add('fadeout'); setTimeout(()=>{ loadEl.style.display='none'; }, 550);
         },
         (ev)=>{ if (ev.total) loadT.textContent = 'モデル読み込み中… ' + Math.round(ev.loaded/ev.total*100) + '%'; },
@@ -319,6 +320,7 @@
         const startOn = !s.off;
         const row = document.createElement('div');
         row.className = 'row' + (startOn ? ' on' : '');
+        row.dataset.key = s.key;   // 共有ルームの受信時にチェック状態を復元するため
         row.innerHTML = `<span class="dot" style="background:${s.color}"></span>
           <span class="sw">${startOn?'✓':''}</span><span class="nm">${s.label}</span><span class="ct">${meshes.length}</span>`;
         row.addEventListener('click', () => {
@@ -448,7 +450,7 @@
     const VS = makeViewSync(THREE);
     const RP = readRoomParams();
     let room = null, follower = false, wantPose = null, ptrLocal = null;
-    let lastSent = 0, lastJson = '';
+    let lastSent = 0, lastJson = '', lastPoseSent = 0;
     const shareEl = document.getElementById('share'), pill = document.getElementById('pill');
     const shareSt = document.getElementById('shareSt'), pillT = document.getElementById('pillT');
     const roomCode = document.getElementById('roomCode'), shareHint = document.getElementById('shareHint');
@@ -508,6 +510,7 @@
         onStatus: setStatus,
         onRole: (isP) => { setFollower(!isP); setStatus(room && room.isConnected() ? 'open' : 'connecting'); },
         onPose: (d) => { wantPose = d; },
+        onState: (d) => { try { applyState(d); } catch(e){} },
       });
       const base = location.origin + location.pathname;
       shareHint.innerHTML = '参加者用URL:<br><code style="word-break:break-all">' + base + '?room=' + c + '&role=f</code>';
@@ -528,6 +531,30 @@
     });
     if (RP.enabled && RP.room) join(RP.room);   // QR等からの自動入室
 
+    // 表示状態は「今かくれている構造の名前一覧」をそのまま送る。
+    // 分類器を各ページに複製せずに済み、送り手と受け手で解釈がズレようがない。
+    // まれにしか変わらないので、毎フレームは軽いチェックサムだけ取って変化時に本体を作る。
+    let lastStateHash = null, lastStateSent = 0, pendingState = null;
+    function stateHash(){
+      let h = 0;
+      for (const m of pickables) h = (h*31 + (m.visible ? 1 : 0)) | 0;
+      return (h*31 + (selected ? selected.id : 0)) | 0;
+    }
+    function applyState(st){
+      // 入室直後はまだGLB読込中で pickables が空。ここで捨てると先生の表示状態を
+      // 受け取れないまま既定の姿を見続けることになるので、保持して読込後に適用する。
+      pendingState = st;
+      if (!pickables.length) return;
+      const hid = new Set(st.hid || []);
+      for (const m of pickables) m.visible = !hid.has(m.name);
+      for (const row of listEl.querySelectorAll('.row')){
+        const on = (bySystem[row.dataset.key] || []).some(m => m.visible);
+        row.classList.toggle('on', on); row.querySelector('.sw').textContent = on ? '✓' : '';
+      }
+      const want = st.sel ? pickables.find(m => m.name === st.sel) : null;
+      if (want !== selected){ if (want) select(want); else closeSel(); }
+    }
+
     // 送受信の1ステップ。描画ループから毎フレーム呼ぶ（検証時はタイマーからも呼べる）
     function syncTick(){
       if (!room || !modelObj) return;
@@ -538,21 +565,31 @@
         showPointer(wantPose.p || null);
       } else if (room.isPresenter()){
         const now = performance.now();
-        if (now - lastSent < 83) return;   // 12Hz。受信側で補間するのでこれで滑らかに見える
+        const h = stateHash();
+        if (h !== lastStateHash && now - lastStateSent >= 250){   // 表示状態は最大4Hz
+          lastStateHash = h; lastStateSent = now;
+          room.sendState({ hid: pickables.filter(m => !m.visible).map(m => m.name),
+                           sel: selected ? selected.name : null });
+        }
+        if (now - lastSent < 83) return;   // 視点は12Hz。受信側で補間するのでこれで滑らかに見える
         lastSent = now;
         const p = VS.encode({ model:modelObj, centerWorld, radiusWorld, camWorld: camera.position });
         if (ptrLocal) p.p = ptrLocal;
+        // 静止中は送らない。ただし2秒に1度は必ず送る＝先生が動かしていない間に入室した
+        // 学生にも視点が届く（中継の pose はメモリ保持なので待機で失われることがある）。
         const j = JSON.stringify(p);
-        if (j !== lastJson){ lastJson = j; room.sendPose(p); }   // 静止中は送らない
+        if (j !== lastJson || now - lastPoseSent > 2000){ lastJson = j; lastPoseSent = now; room.sendPose(p); }
       }
     }
 
     renderer.setAnimationLoop(() => { syncTick(); controls.update(); renderer.render(scene, camera); });
 
     // 検証用ハンドル（動作には無関係。同期の実測やコンソールからの確認に使う）
-    window.__dbg = { THREE, VS, camera, controls, root, syncTick,
+    window.__dbg = { THREE, VS, camera, controls, root, syncTick, pickables, bySystem,
+      setPointer, applyState, stateHash, listEl,
       get model(){ return modelObj; }, get room(){ return room; }, get wantPose(){ return wantPose; },
-      get radiusWorld(){ return radiusWorld; }, get follower(){ return follower; } };
+      get radiusWorld(){ return radiusWorld; }, get follower(){ return follower; },
+      get selected(){ return selected; } };
 
     loadModel(MODELS[0]);
   </script>

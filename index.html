@@ -53,6 +53,7 @@
     const root=new THREE.Group(); scene.add(root);   // 回転・配置用の親
     let modelObj=null, radiusWorldBase=1, radiusLocal=1;   // 共有ルームの視点計算に使う
     let follower=false;                                    // 参加者モード（先生の操作に追従）
+    const meshList=[];                                     // 表示状態の同期に使う全メッシュ
 
     // === 操作: 片手=平行移動のみ(回転しない) / 両手=回転＋拡大縮小＋移動 ===
     //   重要: 片手はアタッチ(reparent)しない＝手首の傾きを拾わない。これで持ち替えても
@@ -129,11 +130,16 @@
         model.traverse(o=>{
           if(o.isMesh){
             meshes++;
-            if(HIDE.test(o.name)){ o.visible=false; hidden++; if(hiddenNames.length<14) hiddenNames.push(o.name); return; }
+            meshList.push(o);
+            // AR で前面を塞ぐ構造はこの端末の方針として常に隠す（共有ルームでも上書きさせない）
+            if(HIDE.test(o.name)){ o.userData.forceHidden=true; o.visible=false; hidden++; if(hiddenNames.length<14) hiddenNames.push(o.name); return; }
             const g=o.geometry; tris += g.index? g.index.count/3 : (g.attributes.position? g.attributes.position.count/3:0);
             // 加算表示で見えるよう自発光ブースト＋両面
             const mats=Array.isArray(o.material)?o.material:[o.material];
             for(const mt of mats){ if(mt){ mt.emissive=mt.color? mt.color.clone():new THREE.Color(0x888888); mt.emissiveIntensity=0.35; mt.side=THREE.DoubleSide; mt.metalness=0.0; mt.roughness=0.9; } }
+            const f=Array.isArray(o.material)?o.material[0]:o.material;   // 選択ハイライトの復帰用
+            o.userData.baseEm = f&&f.emissive ? f.emissive.clone() : new THREE.Color(0x000000);
+            o.userData.baseEI = (f&&f.emissiveIntensity!=null) ? f.emissiveIntensity : 1;
           }
         });
         log(`非表示 ${hidden}件: ${hiddenNames.join(', ')}`);
@@ -152,6 +158,7 @@
         log('操作: 片手=移動 ／ 両手でつまみ、片手を手前・片手を奥へ回すと回転(背面も)・広げると拡大');
         log('※背面まで届かない時は一度離してつまみ直すと続きから回せます');
         btn.disabled=false; btn.textContent='▶ ENTER AR';
+        if(pendingState){ try{ applyState(pendingState); log('先生の表示状態を反映しました'); }catch(e){} }
       },
       (ev)=>{ if(ev.total){ const p=Math.round(ev.loaded/ev.total*100); if(p>=_dlPct+25||p===100){ _dlPct=p; log('DL '+p+'%'); } } },
       (err)=>{ log('✗ GLB読込エラー: '+(err.message||err)); }
@@ -160,7 +167,7 @@
     // ===== 共有ルーム =====
     // QRに ?room=XXXX&role=f を入れておけば、HL2は見つめてOpenするだけで参加できる（打鍵ゼロ）。
     const VS=makeViewSync(THREE), RP=readRoomParams();
-    let room=null, wantPose=null, lastSent=0, lastJson='';
+    let room=null, wantPose=null, lastSent=0, lastJson='', lastPoseSent=0;
     const _v=new THREE.Vector3();
     const camWorld=()=>{
       const c = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
@@ -178,6 +185,29 @@
       if(!arr){ ptrMesh.visible=false; return; }
       ptrMesh.position.fromArray(arr); ptrMesh.visible=true;
     }
+    // 先生が「今かくれている構造」を名前で送ってくるので、そのまま反映する。
+    // ただし forceHidden（ARで前面を塞ぐ構造）はこの端末の方針として常に隠したまま。
+    let selMesh=null, pendingState=null;
+    function setHighlight(o,on){
+      const mats=Array.isArray(o.material)?o.material:[o.material];
+      for(const m of mats){ if(!m||!m.emissive) continue;
+        if(on){ m.emissive.setHex(0x2b6cff); m.emissiveIntensity=0.9; }
+        else { if(o.userData.baseEm) m.emissive.copy(o.userData.baseEm); m.emissiveIntensity=o.userData.baseEI??1; } }
+    }
+    function applyState(st){
+      // 入室直後はまだGLB読込中で meshList が空。ここで捨てると学生は先生の表示状態を
+      // 受け取れないまま既定の姿を見続けることになるので、必ず保持して読込後に適用する。
+      pendingState=st;
+      if(!meshList.length) return;
+      const hid=new Set(st.hid||[]);
+      for(const m of meshList) m.visible = !m.userData.forceHidden && !hid.has(m.name);
+      const want = st.sel ? meshList.find(m=>m.name===st.sel) : null;
+      if(want!==selMesh){
+        if(selMesh) setHighlight(selMesh,false);
+        selMesh=want||null;
+        if(selMesh){ setHighlight(selMesh,true); log('先生が選択: '+selMesh.name); }
+      }
+    }
     function syncTick(){
       if(!room || !modelObj) return;
       if(follower){
@@ -190,19 +220,22 @@
         lastSent=now;
         const p=VS.encode({model:modelObj, centerWorld:root.getWorldPosition(new THREE.Vector3()),
                            radiusWorld:radiusWorldBase*root.scale.x, camWorld:camWorld()});
+        // 静止中は送らない。ただし2秒に1度は必ず送る（待機中に入室した端末にも視点を届ける）
         const j=JSON.stringify(p);
-        if(j!==lastJson){ lastJson=j; room.sendPose(p); }
+        if(j!==lastJson || now-lastPoseSent>2000){ lastJson=j; lastPoseSent=now; room.sendPose(p); }
       }
     }
     if(RP.enabled && RP.room){
       room=createRoom({ url:RP.url, room:RP.room,
         onStatus:(s)=>log('共有ルーム['+RP.room+']: '+s),
         onRole:(isP)=>{ follower=!isP; log(follower?'参加者モード（先生の操作に同期／片手で置き場所だけ移動可）':'操作モード（あなたの操作が全員に届きます）'); },
-        onPose:(d)=>{ wantPose=d; } });
+        onPose:(d)=>{ wantPose=d; },
+        onState:(d)=>{ try{ applyState(d); }catch(e){ log('state適用エラー: '+(e.message||e)); } } });
       if(RP.role==='presenter') room.claim();
     }
-    window.__dbg={THREE,VS,camera,root,syncTick,get model(){return modelObj},get room(){return room},
-      get wantPose(){return wantPose},get follower(){return follower},camWorld};
+    window.__dbg={THREE,VS,camera,root,syncTick,applyState,meshList,camWorld,
+      get model(){return modelObj},get room(){return room},
+      get wantPose(){return wantPose},get follower(){return follower},get selMesh(){return selMesh}};
 
     let frames=0;
     renderer.setAnimationLoop(()=>{
