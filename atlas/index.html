@@ -552,6 +552,7 @@
     // 印刷実寸に合わせること。ここがズレると模型の大きさも距離も全部ズレる。
     // A4に刷ると黒枠の外寸は16cm（実測）。用紙を変えたら定規で測って合わせる。
     // 実機で調整できるよう URL で上書きできる: ?marker=0.16&model=0.5&arres=1280
+    const BUILD = 'v25';   // atlas/sw.js の CACHE と揃える。実機の版ズレ切り分け用
     const _q = new URLSearchParams(location.search);
     const MARKER_SIZE_M = Math.max(0.02, parseFloat(_q.get('marker')) || 0.16);   // マーカー一辺(m)
     // 模型はマーカーに比例させる。固定値にするとマーカーを小さく刷ったとき模型だけ巨大になり、
@@ -630,6 +631,7 @@
       document.body.classList.add('marker-lost');
       arFrames = 0; arHits = 0;
       updateMarkerMsg();
+      updateMarkerHud(false);   // 空のまま出さない（状況が見えないと動いていないと誤解される）
       document.body.classList.add('marker-on');
       markerBtn.classList.add('acc');
     }
@@ -684,7 +686,8 @@
         '<br><span style="font-weight:400;font-size:12px;opacity:.75">' +
         `マーカー ${(MARKER_SIZE_M*100).toFixed(0)}cm ／ 模型 ${(MODEL_ON_MARKER_M*100).toFixed(0)}cm` +
         `<br>映像 ${arVideoSize} ／ 解析 ${c ? c.canvasWidth+'×'+c.canvasHeight : '-'}` +
-        `<br>解析フレーム ${arFrames} ／ 検出 ${arHits}</span>`;
+        `<br>解析フレーム ${arFrames} ／ 検出 ${arHits}` +
+        `<br>ビルド ${BUILD}</span>`;   // 実機がどの版を動かしているかを切り分けるため
     }
 
     async function enterAR(){
