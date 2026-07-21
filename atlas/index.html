@@ -527,10 +527,10 @@
     // 同じマーカーを見ている端末は、通信なしで同じ物理位置に模型を見る（共有アンカー方式）。
     // ⚠️マーカーが画面から外れると追従は止まる。だから等身大でなく卓上サイズで使う。
     // 印刷実寸に合わせること。ここがズレると模型の大きさも距離も全部ズレる。
-    // A4に刷ると黒枠の外寸は18cm（実測）。用紙を変えたら定規で測って合わせる。
-    // 実機で調整できるよう URL で上書きできる: ?marker=0.18&model=0.5&arres=1280
+    // A4に刷ると黒枠の外寸は16cm（実測）。用紙を変えたら定規で測って合わせる。
+    // 実機で調整できるよう URL で上書きできる: ?marker=0.16&model=0.5&arres=1280
     const _q = new URLSearchParams(location.search);
-    const MARKER_SIZE_M = Math.max(0.02, parseFloat(_q.get('marker')) || 0.18);   // マーカー一辺(m)
+    const MARKER_SIZE_M = Math.max(0.02, parseFloat(_q.get('marker')) || 0.16);   // マーカー一辺(m)
     const MODEL_ON_MARKER_M = Math.max(0.05, parseFloat(_q.get('model')) || 0.50); // 模型の高さ(m)
     // マーカーが小さいほど認識できる距離が縮む（経験則で一辺の6〜7倍）。18cmだと約1.1〜1.3m。
     // 検出解像度を上げると範囲と安定性が稼げるが、その分CPUを使う。
