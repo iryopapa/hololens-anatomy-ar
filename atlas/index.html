@@ -21,7 +21,7 @@
     #cam{ position:fixed; inset:0; width:100%; height:100%; object-fit:cover; z-index:0;
       display:none; background:#000; }
     body.ar #cam{ display:block; }
-    body.ar #hint{ display:none; }
+    body.ar #hint{ bottom:calc(env(safe-area-inset-bottom) + 72px); }   /* ARバーの上へ逃がす */
     #arbar{ position:fixed; z-index:20; left:50%; transform:translateX(-50%);
       bottom:calc(env(safe-area-inset-bottom) + 14px); display:none; gap:8px; }
     body.ar #arbar{ display:flex; }
@@ -479,6 +479,7 @@
     const HOME_BG = scene.background;
     const AR_DIST = 2.0;        // 目の前 2m
     const AR_EYE = 1.5;         // 立位の目線高さの想定
+    const AR_ROT_GAIN = 0.008;  // 1本指ドラッグの回転量（画面1pxあたりのラジアン）
 
     const _zee = new THREE.Vector3(0, 0, 1);
     const _eul = new THREE.Euler();
@@ -550,6 +551,9 @@
       addEventListener('deviceorientation', onOrient, true);
       addEventListener('orientationchange', onScreenAngle);
       recenter();
+      const hintEl = document.getElementById('hint');
+      hintEl.textContent = '1本指=回転 ／ 2本指=移動・拡大 ／ タップ=選択';
+      hintEl.classList.remove('fadeout');
       passBtn.textContent = '📷 AR中';
       passBtn.classList.add('acc');
     }
@@ -755,7 +759,21 @@
     canvas.addEventListener('pointerdown', (e) => { if (arMode) arPtrs.set(e.pointerId, {x:e.clientX, y:e.clientY}); });
     canvas.addEventListener('pointermove', (e) => {
       if (!arMode || !arPtrs.has(e.pointerId)) return;
+      const prev = arPtrs.get(e.pointerId);
       arPtrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
+      // 1本指ドラッグ＝モデルをその場で回す。位置は動かさないので現実に置いたまま向きだけ変わる。
+      // （指を動かさないタップは選択のまま。pick は移動12px未満のときだけ発火するので衝突しない）
+      if (arPtrs.size === 1){
+        const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+        if (!dx && !dy) return;
+        const q = new THREE.Quaternion();
+        q.setFromAxisAngle(new THREE.Vector3(0,1,0), dx * AR_ROT_GAIN);        // 横＝鉛直軸まわり（背面を見る）
+        root.quaternion.premultiply(q);
+        const right = new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion);
+        q.setFromAxisAngle(right, dy * AR_ROT_GAIN);                            // 縦＝視線に直交する軸まわり
+        root.quaternion.premultiply(q);
+        return;
+      }
       if (arPtrs.size !== 2) return;
       const [a, b] = [...arPtrs.values()];
       const dist = Math.hypot(a.x-b.x, a.y-b.y), mid = {x:(a.x+b.x)/2, y:(a.y+b.y)/2};
