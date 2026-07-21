@@ -26,6 +26,10 @@
       bottom:calc(env(safe-area-inset-bottom) + 14px); display:none; gap:8px; }
     body.ar #arbar{ display:flex; }
     #arbar .btn{ font-size:14px; padding:12px 16px; }
+    #markerMsg{ position:fixed; z-index:20; left:50%; top:50%; transform:translate(-50%,-50%);
+      display:none; background:rgba(0,0,0,.68); color:#fff; font-size:15px; font-weight:700;
+      padding:14px 20px; border-radius:14px; pointer-events:none; }
+    body.marker-lost #markerMsg{ display:block; }
     #top{ position:fixed; top:0; left:0; right:0; z-index:20; display:flex; align-items:center; gap:8px;
       padding:calc(env(safe-area-inset-top) + 8px) 12px 8px; background:linear-gradient(#141622ee,#14162200); }
     #top h1{ font-size:16px; margin:0; font-weight:700; flex:0 0 auto; }
@@ -100,9 +104,11 @@
   <video id="cam" playsinline muted autoplay></video>
   <canvas id="c"></canvas>
   <div id="arbar">
+    <button class="btn" id="markerBtn">🎯 マーカー</button>
     <button class="btn" id="recenterBtn">正面に置き直す</button>
     <button class="btn" id="arExitBtn">AR終了</button>
   </div>
+  <div id="markerMsg">マーカーを映してください</div>
   <div id="top">
     <button class="btn" id="menuBtn">☰ 系統</button>
     <h1>解剖アトラス</h1>
@@ -270,7 +276,7 @@
 
     const root = new THREE.Group(); scene.add(root);
     const pickables = []; const bySystem = {}; let selected = null; let dissect = false;
-    let modelObj = null, radiusWorld = 1, radiusLocal = 1;   // 共有ルームの視点計算に使う
+    let modelObj = null, radiusWorld = 1, radiusLocal = 1, modelHeightWorld = 1;   // 共有ルームとマーカー配置に使う
     const HOME = { pos:new THREE.Vector3(), tgt:new THREE.Vector3() };
     function goHome(){ camera.position.copy(HOME.pos); controls.target.copy(HOME.tgt); controls.update(); }
 
@@ -318,6 +324,7 @@
           // HOME距離は viewsync の HOME_ZOOM を基準にする（HL2側と初期の見かけを揃えるため）
           const dist = radius * HOME_ZOOM;
           modelObj = model; radiusWorld = radius; radiusLocal = radius;   // atlasは model.scale=1 なので同値
+          modelHeightWorld = size.y || (radius * 2);                      // マーカー上での実寸合わせに使う
           HOME.pos.set(0, size.y*0.05, dist); HOME.tgt.set(0,0,0);
           controls.minDistance = radius*0.15; controls.maxDistance = radius*10; goHome();
           for (const s of SYSTEMS){ if(s.off){ for(const m of (bySystem[s.key]||[])) m.visible=false; } }  // 既定オフ系統
@@ -377,6 +384,7 @@
       down = null;
     });
     function pick(cx, cy){
+      if (!root.visible) return;   // マーカー未検出で模型が出ていないときは選択させない
       const r = canvas.getBoundingClientRect();
       ptr.x = ((cx-r.left)/r.width)*2 - 1; ptr.y = -((cy-r.top)/r.height)*2 + 1;
       raycaster.setFromCamera(ptr, camera);
@@ -514,6 +522,79 @@
       root.position.y = radiusWorld - AR_EYE;   // 足元が床に来るように下げる
     }
 
+    // ===== マーカー追従（AR.js・iPad同士のコロケーション用） =====
+    // 印刷したマーカーを各端末が独立に認識し、世界の原点をマーカーに固定する。
+    // 同じマーカーを見ている端末は、通信なしで同じ物理位置に模型を見る（共有アンカー方式）。
+    // ⚠️マーカーが画面から外れると追従は止まる。だから等身大でなく卓上サイズで使う。
+    const MARKER_SIZE_M = 0.40;      // 印刷したマーカーの一辺(m)。印刷サイズを変えたらここも変える
+    const MODEL_ON_MARKER_M = 0.50;  // マーカー上に出す模型の高さ(m)
+    let markerMode = false, arCtx = null, arMarker = null, arjsLoading = null;
+    const markerBtn = document.getElementById('markerBtn');
+
+    function loadArjs(){
+      if (window.THREEx) return Promise.resolve();
+      if (arjsLoading) return arjsLoading;
+      window.THREE = THREE;   // ar-threex.js は UMD で window.THREE を要求する
+      arjsLoading = new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = './vendor/arjs/ar-threex.js';
+        s.onload = res;
+        s.onerror = () => rej(new Error('AR.js を読み込めませんでした'));
+        document.head.appendChild(s);
+      });
+      return arjsLoading;
+    }
+
+    // マーカー座標系は「1単位 = マーカーの一辺」。印刷実寸から逆算して模型を実寸で載せる。
+    function placeOnMarker(){
+      const hUnits = MODEL_ON_MARKER_M / MARKER_SIZE_M;
+      root.scale.setScalar(hUnits / (modelHeightWorld || 1));
+      root.position.set(0, hUnits / 2, 0);   // 足元をマーカー面(y=0)へ
+      root.quaternion.identity();
+    }
+
+    async function enterMarker(){
+      try { await loadArjs(); }
+      catch(e){ alert(e.message); return; }
+      arCtx = new THREEx.ArToolkitContext({
+        cameraParametersUrl: './vendor/arjs/camera_para.dat',
+        detectionMode: 'mono',
+        maxDetectionRate: 30,
+        canvasWidth: 640, canvasHeight: 480,
+      });
+      await new Promise((res) => arCtx.init(res));
+      // ⚠️これを忘れると背景映像と模型の遠近が合わずマーカーからずれて見える
+      camera.projectionMatrix.copy(arCtx.getProjectionMatrix());
+      arMarker = new THREEx.ArMarkerControls(arCtx, camera, {
+        type: 'pattern',
+        patternUrl: './vendor/arjs/patt.hiro',
+        changeMatrixMode: 'cameraTransformMatrix',   // 原点をマーカーに固定しカメラ側を動かす
+        smooth: true, smoothCount: 5, smoothTolerance: 0.01, smoothThreshold: 2,
+      });
+      markerMode = true;
+      placeOnMarker();
+      markerBtn.classList.add('acc');
+    }
+
+    function exitMarker(){
+      markerMode = false;
+      arMarker = null; arCtx = null;
+      document.body.classList.remove('marker-lost');
+      root.visible = true;
+      markerBtn.classList.remove('acc');
+      root.scale.setScalar(1);
+      camera.updateProjectionMatrix();   // AR.js が差し替えた投影行列を戻す
+      recenter();
+    }
+
+    function markerTick(){
+      if (!arCtx || !camEl.videoWidth) return;
+      try { arCtx.update(camEl); } catch(e){ return; }
+      const seen = !!(arMarker && arMarker.object3d && arMarker.object3d.visible);
+      root.visible = seen;
+      document.body.classList.toggle('marker-lost', !seen);
+    }
+
     async function enterAR(){
       try {
         // iOS は動きセンサーの許可が実タップ由来でないと出ない
@@ -559,6 +640,7 @@
     }
 
     function exitAR(){
+      if (markerMode) exitMarker();
       arMode = false;
       document.body.classList.remove('ar');
       removeEventListener('deviceorientation', onOrient, true);
@@ -577,7 +659,11 @@
 
     const passBtn = document.getElementById('passBtn');
     passBtn.addEventListener('click', () => { arMode ? exitAR() : enterAR(); });
-    document.getElementById('recenterBtn').addEventListener('click', recenter);
+    markerBtn.addEventListener('click', () => {
+      if (!arMode) return;
+      markerMode ? exitMarker() : enterMarker();
+    });
+    document.getElementById('recenterBtn').addEventListener('click', () => { if (!markerMode) recenter(); });
     document.getElementById('arExitBtn').addEventListener('click', exitAR);
     // 背面に回るとiOSはカメラを止めるので復帰させる
     addEventListener('visibilitychange', () => {
@@ -723,7 +809,13 @@
         if (!wantPose) return;
         // AR中はカメラが端末の向きに縛られるので、代わりにモデルを回して同じ面を見せる
         // （HoloLens と同じやり方）。大きさと置き場所は各自のものなので同期しない。
-        if (arMode) VS.applyTurntable({ root, camWorld: camera.position, applyScale:false }, wantPose, 0.2);
+        // マーカー上では全員が同じ物理位置の模型を別々の場所から見る。配るのは「視点」ではなく
+        // 模型そのものの向きと大きさ（位置はマーカーが決めるので同期しない）。
+        if (markerMode && wantPose.q){
+          root.quaternion.slerp(new THREE.Quaternion().fromArray(wantPose.q), 0.3);
+          if (wantPose.s) root.scale.setScalar(THREE.MathUtils.lerp(root.scale.x, wantPose.s, 0.3));
+        }
+        else if (arMode) VS.applyTurntable({ root, camWorld: camera.position, applyScale:false }, wantPose, 0.2);
         else VS.applyOrbit({ camera, controls, model:modelObj, centerWorld, radiusWorld }, wantPose, 0.25);
         showPointer(wantPose.p || null);
       } else {   // 操作権を持っている、または誰も持っていない（=自由操作）。後者は最初の送信で操作権を得る。
@@ -738,6 +830,10 @@
         lastSent = now;
         const p = VS.encode({ model:modelObj, centerWorld, radiusWorld, camWorld: camera.position });
         if (ptrLocal) p.p = ptrLocal;
+        if (markerMode){   // マーカー勢向けに模型自身の姿勢も載せる（従来のd/zはそのまま残す）
+          p.q = root.quaternion.toArray().map(n => Math.round(n*1e4)/1e4);
+          p.s = Math.round(root.scale.x*1e4)/1e4;
+        }
         // 静止中は送らない。ただし2秒に1度は必ず送る＝先生が動かしていない間に入室した
         // 学生にも視点が届く（中継の pose はメモリ保持なので待機で失われることがある）。
         const j = JSON.stringify(p);
@@ -746,7 +842,8 @@
     }
 
     renderer.setAnimationLoop(() => {
-      if (arMode && orientOK) orientationToQuaternion(camera.quaternion);   // 端末の傾きで視線を決める
+      if (arMode && markerMode) markerTick();                               // マーカーがカメラ姿勢を決める
+      else if (arMode && orientOK) orientationToQuaternion(camera.quaternion);   // 端末の傾きで視線を決める
       syncTick();
       if (!arMode) controls.update();
       renderer.render(scene, camera);
@@ -779,6 +876,7 @@
       const dist = Math.hypot(a.x-b.x, a.y-b.y), mid = {x:(a.x+b.x)/2, y:(a.y+b.y)/2};
       if (!arGesture){ arGesture = { dist0:dist, scale0:root.scale.x, mid0:mid, pos0:root.position.clone() }; return; }
       root.scale.setScalar(THREE.MathUtils.clamp(arGesture.scale0 * dist / Math.max(1, arGesture.dist0), 0.1, 5));
+      if (markerMode) return;   // マーカーに固定されているので位置は動かさない
       const dx = (mid.x - arGesture.mid0.x) / innerWidth, dy = (mid.y - arGesture.mid0.y) / innerHeight;
       const right = new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion);
       root.position.copy(arGesture.pos0)
@@ -793,6 +891,9 @@
     window.__dbg = { THREE, VS, camera, controls, root, syncTick, pickables, bySystem,
       setPointer, applyState, stateHash, listEl,
       enterAR, exitAR, recenter, orientationToQuaternion,
+      loadArjs, enterMarker, exitMarker, placeOnMarker, markerTick,
+      get markerMode(){ return markerMode; },
+      MARKER_SIZE_M, MODEL_ON_MARKER_M, get modelHeightWorld(){ return modelHeightWorld; },
       setOrient(a,b,g,s){ devA=a; devB=b; devG=g; screenAngle=s; },   // 検証用に姿勢を注入
       setArMode(v){ arMode=v; orientOK=v; document.body.classList.toggle('ar', v); },
       get arMode(){ return arMode; },
