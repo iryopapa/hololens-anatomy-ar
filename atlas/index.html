@@ -526,8 +526,15 @@
     // 印刷したマーカーを各端末が独立に認識し、世界の原点をマーカーに固定する。
     // 同じマーカーを見ている端末は、通信なしで同じ物理位置に模型を見る（共有アンカー方式）。
     // ⚠️マーカーが画面から外れると追従は止まる。だから等身大でなく卓上サイズで使う。
-    const MARKER_SIZE_M = 0.40;      // 印刷したマーカーの一辺(m)。印刷サイズを変えたらここも変える
-    const MODEL_ON_MARKER_M = 0.50;  // マーカー上に出す模型の高さ(m)
+    // 印刷実寸に合わせること。ここがズレると模型の大きさも距離も全部ズレる。
+    // A4に刷ると黒枠の外寸は18cm（実測）。用紙を変えたら定規で測って合わせる。
+    // 実機で調整できるよう URL で上書きできる: ?marker=0.18&model=0.5&arres=1280
+    const _q = new URLSearchParams(location.search);
+    const MARKER_SIZE_M = Math.max(0.02, parseFloat(_q.get('marker')) || 0.18);   // マーカー一辺(m)
+    const MODEL_ON_MARKER_M = Math.max(0.05, parseFloat(_q.get('model')) || 0.50); // 模型の高さ(m)
+    // マーカーが小さいほど認識できる距離が縮む（経験則で一辺の6〜7倍）。18cmだと約1.1〜1.3m。
+    // 検出解像度を上げると範囲と安定性が稼げるが、その分CPUを使う。
+    const AR_RES_W = Math.max(320, parseInt(_q.get('arres')) || 1280);
     let markerMode = false, arCtx = null, arMarker = null, arjsLoading = null;
     const markerBtn = document.getElementById('markerBtn');
 
@@ -560,7 +567,7 @@
         cameraParametersUrl: './vendor/arjs/camera_para.dat',
         detectionMode: 'mono',
         maxDetectionRate: 30,
-        canvasWidth: 640, canvasHeight: 480,
+        canvasWidth: AR_RES_W, canvasHeight: Math.round(AR_RES_W * 3 / 4),
       });
       await new Promise((res) => arCtx.init(res));
       // ⚠️これを忘れると背景映像と模型の遠近が合わずマーカーからずれて見える
@@ -573,6 +580,11 @@
       });
       markerMode = true;
       placeOnMarker();
+      // 実機で設定値を確認できるように出す（印刷実寸と食い違うと大きさも距離も狂うため）
+      document.getElementById('markerMsg').innerHTML =
+        'マーカーを映してください<br><span style="font-weight:400;font-size:12px;opacity:.75">' +
+        `マーカー ${(MARKER_SIZE_M*100).toFixed(0)}cm ／ 模型 ${(MODEL_ON_MARKER_M*100).toFixed(0)}cm ` +
+        `／ 検出 ${AR_RES_W}px</span>`;
       markerBtn.classList.add('acc');
     }
 
