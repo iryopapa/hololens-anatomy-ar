@@ -69,7 +69,9 @@ export function makeViewSync(THREE) {
      * 観察者の実際の方向 dirWorld に対し、モデルが pose.d の面を向けるような root 姿勢を作る。
      * 上方向のロールも lookAt 基準系の差として正しく再現される。
      */
-    applyTurntable({ root, camWorld }, pose, t) {
+    // applyScale=false のとき大きさは同期しない。カメラ透過ARでは実物大と置き場所は
+    // 各自のものなので、向きだけ合わせる（HL2で位置を同期しないのと同じ考え方）。
+    applyTurntable({ root, camWorld, applyScale = true }, pose, t) {
       const dirWorld = camWorld.clone().sub(root.position);
       if (dirWorld.lengthSq() < 1e-8) return;
       dirWorld.normalize();
@@ -77,6 +79,7 @@ export function makeViewSync(THREE) {
       // Q = B * A⁻¹  （A: モデル系→基準系, B: ワールド系→基準系）
       const want = basis(dirWorld).multiply(basis(dirLocal).invert());
       root.quaternion.slerp(want, t);
+      if (!applyScale) return;
       const s = THREE.MathUtils.clamp(HOME_ZOOM / Math.max(1e-4, pose.z), 0.05, 8);
       root.scale.setScalar(THREE.MathUtils.lerp(root.scale.x, s, t));
     },

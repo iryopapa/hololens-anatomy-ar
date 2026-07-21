@@ -15,7 +15,17 @@
     *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
     html,body{ margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--txt);
       font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif; }
-    #c{ position:fixed; inset:0; display:block; touch-action:none; }
+    #c{ position:fixed; inset:0; display:block; touch-action:none; z-index:1; }
+    /* カメラ透過AR: 背景は DOM の <video> を重ねる。WebGL の videoテクスチャ取込は
+       WebKit に既知の重い欠陥があるため、Core Animation に合成させるのが正解。 */
+    #cam{ position:fixed; inset:0; width:100%; height:100%; object-fit:cover; z-index:0;
+      display:none; background:#000; }
+    body.ar #cam{ display:block; }
+    body.ar #hint{ display:none; }
+    #arbar{ position:fixed; z-index:20; left:50%; transform:translateX(-50%);
+      bottom:calc(env(safe-area-inset-bottom) + 14px); display:none; gap:8px; }
+    body.ar #arbar{ display:flex; }
+    #arbar .btn{ font-size:14px; padding:12px 16px; }
     #top{ position:fixed; top:0; left:0; right:0; z-index:20; display:flex; align-items:center; gap:8px;
       padding:calc(env(safe-area-inset-top) + 8px) 12px 8px; background:linear-gradient(#141622ee,#14162200); }
     #top h1{ font-size:16px; margin:0; font-weight:700; flex:0 0 auto; }
@@ -87,11 +97,17 @@
   </style>
 </head>
 <body>
+  <video id="cam" playsinline muted autoplay></video>
   <canvas id="c"></canvas>
+  <div id="arbar">
+    <button class="btn" id="recenterBtn">正面に置き直す</button>
+    <button class="btn" id="arExitBtn">AR終了</button>
+  </div>
   <div id="top">
     <button class="btn" id="menuBtn">☰ 系統</button>
     <h1>解剖アトラス</h1>
     <div class="sp"></div>
+    <button class="btn" id="passBtn">📷 現実に重ねる</button>
     <button class="btn" id="arBtn" style="display:none">🧍 実物大AR</button>
     <button class="btn" id="shareBtn">🔗 共有</button>
     <button class="btn" id="dissectBtn">✂ 解剖</button>
@@ -238,7 +254,7 @@
 
     // ===== Three.js =====
     const canvas = document.getElementById('c');
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });   // alphaはカメラ透過ARで必須
     renderer.setPixelRatio(Math.min(devicePixelRatio||1, 2));
     renderer.setSize(innerWidth, innerHeight);
     const scene = new THREE.Scene(); scene.background = new THREE.Color(0x141622);
@@ -453,6 +469,119 @@
 
     addEventListener('resize', () => { camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
 
+    // ===== カメラ透過AR =====
+    // iPad Safari は WebXR に非対応なので、背景をリアカメラ映像にして 3D を重ねる。
+    // 端末の傾き（3DOF）だけで向きを合わせる方式。視差は出ない＝歩いて回り込むことはできないが、
+    // 系統切替・解剖・タップ名称・共有ルームの同期は全部そのまま使える。
+    const camEl = document.getElementById('cam');
+    let arMode = false, stream = null, orientOK = false;
+    let devA = 0, devB = 0, devG = 0, screenAngle = 0;
+    const HOME_BG = scene.background;
+    const AR_DIST = 2.0;        // 目の前 2m
+    const AR_EYE = 1.5;         // 立位の目線高さの想定
+
+    const _zee = new THREE.Vector3(0, 0, 1);
+    const _eul = new THREE.Euler();
+    const _q0 = new THREE.Quaternion();
+    const _q1 = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);   // 端末背面を前方に向ける -90°/X
+    function orientationToQuaternion(q){
+      // three.js の DeviceOrientationControls は削除済みなので自前で持つ
+      _eul.set(devB, devA, -devG, 'YXZ');
+      q.setFromEuler(_eul);
+      q.multiply(_q1);
+      q.multiply(_q0.setFromAxisAngle(_zee, -screenAngle));
+    }
+    const onOrient = (e) => {
+      if (e.alpha == null) return;
+      devA = THREE.MathUtils.degToRad(e.alpha);
+      devB = THREE.MathUtils.degToRad(e.beta || 0);
+      devG = THREE.MathUtils.degToRad(e.gamma || 0);
+    };
+    const onScreenAngle = () => {
+      const a = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+      screenAngle = THREE.MathUtils.degToRad(a);
+    };
+
+    // モデルを「今向いている方向」の正面へ置き直す。iOSの方位は磁気を使わず少しずつずれるので、
+    // ずれたらこれを押してもらう運用にする（自動補正は磁気が机やケースで乱れて余計に泳ぐ）。
+    function recenter(){
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      fwd.y = 0;
+      if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1);
+      fwd.normalize();
+      root.position.copy(fwd.multiplyScalar(AR_DIST));
+      root.position.y = radiusWorld - AR_EYE;   // 足元が床に来るように下げる
+    }
+
+    async function enterAR(){
+      try {
+        // iOS は動きセンサーの許可が実タップ由来でないと出ない
+        const DOE = window.DeviceOrientationEvent;
+        if (DOE && typeof DOE.requestPermission === 'function'){
+          orientOK = (await DOE.requestPermission()) === 'granted';
+        } else {
+          orientOK = !!DOE;
+        }
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+          audio: false,
+        });
+      } catch(err){
+        alert('カメラまたは動きセンサーを利用できませんでした。\n' +
+              'Safariの設定 →「モーションと画面の向きのアクセス」がオンか確認してください。\n\n' + (err.message||err));
+        return;
+      }
+      camEl.srcObject = stream;
+      try { await camEl.play(); } catch(e){}
+
+      arMode = true;
+      document.body.classList.add('ar');
+      scene.background = null; renderer.setClearAlpha(0);
+      renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5));   // 画素を抑えて描画を軽くする
+      controls.enabled = false;
+      camera.position.set(0, 0, 0);
+      // 実際のカメラの画角に合わせないと、背景と模型のずれ方が違って「浮いて」見える
+      const s = stream.getVideoTracks()[0].getSettings();
+      const aspect = (s.width && s.height) ? (s.width / s.height) : (innerWidth / innerHeight);
+      camera.fov = 2 * THREE.MathUtils.radToDeg(Math.atan(Math.tan(THREE.MathUtils.degToRad(60) / 2) / Math.max(1, aspect)));
+      camera.updateProjectionMatrix();
+      root.scale.setScalar(1);            // 実物大
+      onScreenAngle();
+      addEventListener('deviceorientation', onOrient, true);
+      addEventListener('orientationchange', onScreenAngle);
+      recenter();
+      passBtn.textContent = '📷 AR中';
+      passBtn.classList.add('acc');
+    }
+
+    function exitAR(){
+      arMode = false;
+      document.body.classList.remove('ar');
+      removeEventListener('deviceorientation', onOrient, true);
+      removeEventListener('orientationchange', onScreenAngle);
+      if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+      camEl.srcObject = null;
+      scene.background = HOME_BG; renderer.setClearAlpha(1);
+      renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+      controls.enabled = true;
+      camera.fov = 45; camera.updateProjectionMatrix();
+      root.position.set(0, 0, 0); root.scale.setScalar(1); root.quaternion.identity();
+      goHome();
+      passBtn.textContent = '📷 現実に重ねる';
+      passBtn.classList.remove('acc');
+    }
+
+    const passBtn = document.getElementById('passBtn');
+    passBtn.addEventListener('click', () => { arMode ? exitAR() : enterAR(); });
+    document.getElementById('recenterBtn').addEventListener('click', recenter);
+    document.getElementById('arExitBtn').addEventListener('click', exitAR);
+    // 背面に回るとiOSはカメラを止めるので復帰させる
+    addEventListener('visibilitychange', () => {
+      if (!arMode || document.hidden || !stream) return;
+      if (stream.getVideoTracks().some(t => t.readyState === 'ended')) { exitAR(); }
+      else { camEl.play().catch(()=>{}); }
+    });
+
     // ===== 実物大AR（AR Quick Look） =====
     // 対応端末（iPad/iPhone の Safari）でだけボタンを出す。それ以外では存在ごと隠す。
     (() => {
@@ -588,7 +717,10 @@
       const centerWorld = root.getWorldPosition(new THREE.Vector3());
       if (follower){
         if (!wantPose) return;
-        VS.applyOrbit({ camera, controls, model:modelObj, centerWorld, radiusWorld }, wantPose, 0.25);
+        // AR中はカメラが端末の向きに縛られるので、代わりにモデルを回して同じ面を見せる
+        // （HoloLens と同じやり方）。大きさと置き場所は各自のものなので同期しない。
+        if (arMode) VS.applyTurntable({ root, camWorld: camera.position, applyScale:false }, wantPose, 0.2);
+        else VS.applyOrbit({ camera, controls, model:modelObj, centerWorld, radiusWorld }, wantPose, 0.25);
         showPointer(wantPose.p || null);
       } else {   // 操作権を持っている、または誰も持っていない（=自由操作）。後者は最初の送信で操作権を得る。
         const now = performance.now();
@@ -609,11 +741,43 @@
       }
     }
 
-    renderer.setAnimationLoop(() => { syncTick(); controls.update(); renderer.render(scene, camera); });
+    renderer.setAnimationLoop(() => {
+      if (arMode && orientOK) orientationToQuaternion(camera.quaternion);   // 端末の傾きで視線を決める
+      syncTick();
+      if (!arMode) controls.update();
+      renderer.render(scene, camera);
+    });
+
+    // AR中は OrbitControls を止めているので、2本指の操作を自前で受ける
+    // （1本指のタップ選択は既存の pointerup 側がそのまま効く）
+    const arPtrs = new Map();
+    let arGesture = null;
+    canvas.addEventListener('pointerdown', (e) => { if (arMode) arPtrs.set(e.pointerId, {x:e.clientX, y:e.clientY}); });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!arMode || !arPtrs.has(e.pointerId)) return;
+      arPtrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
+      if (arPtrs.size !== 2) return;
+      const [a, b] = [...arPtrs.values()];
+      const dist = Math.hypot(a.x-b.x, a.y-b.y), mid = {x:(a.x+b.x)/2, y:(a.y+b.y)/2};
+      if (!arGesture){ arGesture = { dist0:dist, scale0:root.scale.x, mid0:mid, pos0:root.position.clone() }; return; }
+      root.scale.setScalar(THREE.MathUtils.clamp(arGesture.scale0 * dist / Math.max(1, arGesture.dist0), 0.1, 5));
+      const dx = (mid.x - arGesture.mid0.x) / innerWidth, dy = (mid.y - arGesture.mid0.y) / innerHeight;
+      const right = new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion);
+      root.position.copy(arGesture.pos0)
+        .addScaledVector(right, dx * AR_DIST * 2)
+        .addScaledVector(new THREE.Vector3(0,1,0), -dy * AR_DIST * 2);
+    });
+    const arPtrEnd = (e) => { arPtrs.delete(e.pointerId); if (arPtrs.size < 2) arGesture = null; };
+    canvas.addEventListener('pointerup', arPtrEnd);
+    canvas.addEventListener('pointercancel', arPtrEnd);
 
     // 検証用ハンドル（動作には無関係。同期の実測やコンソールからの確認に使う）
     window.__dbg = { THREE, VS, camera, controls, root, syncTick, pickables, bySystem,
       setPointer, applyState, stateHash, listEl,
+      enterAR, exitAR, recenter, orientationToQuaternion,
+      setOrient(a,b,g,s){ devA=a; devB=b; devG=g; screenAngle=s; },   // 検証用に姿勢を注入
+      setArMode(v){ arMode=v; orientOK=v; document.body.classList.toggle('ar', v); },
+      get arMode(){ return arMode; },
       get model(){ return modelObj; }, get room(){ return room; }, get wantPose(){ return wantPose; },
       get radiusWorld(){ return radiusWorld; }, get follower(){ return follower; },
       get selected(){ return selected; } };
