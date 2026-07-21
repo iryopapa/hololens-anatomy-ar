@@ -65,6 +65,24 @@
       transform:translateX(-50%); font-size:12px; color:var(--sub); background:var(--panel);
       border:1px solid var(--line); border-radius:20px; padding:8px 14px; text-align:center; }
     .fadeout{ opacity:0; transition:opacity .5s; pointer-events:none; }
+    #share{ position:fixed; z-index:22; left:12px; right:12px; top:calc(env(safe-area-inset-top) + 60px);
+      max-width:420px; margin:0 auto; background:var(--panel); border:1px solid var(--line);
+      border-radius:16px; padding:14px; display:none; }
+    #share.show{ display:block; }
+    #share .hd{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+    #share .hd b{ font-size:15px; } #share .hd .st{ margin-left:auto; font-size:12px; color:var(--sub); }
+    #share .fld{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+    #share .fld label{ font-size:13px; color:var(--sub); width:56px; flex:0 0 auto; }
+    #share .fld input{ flex:1; min-height:40px; border-radius:10px; border:1px solid var(--line);
+      background:#0f1220; color:var(--txt); font-size:16px; padding:8px 12px; letter-spacing:.1em; }
+    #share .acts{ display:flex; gap:8px; }
+    #share .acts .btn{ flex:1; font-size:14px; padding:11px; }
+    #share .mini{ font-size:12px; color:var(--sub); margin-top:10px; line-height:1.55; }
+    #pill{ position:fixed; z-index:21; right:12px; top:calc(env(safe-area-inset-top) + 58px);
+      font-size:12px; font-weight:700; padding:6px 12px; border-radius:20px; display:none;
+      border:1px solid var(--line); background:var(--panel); }
+    #pill.show{ display:block; }
+    #pill .d{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
   </style>
 </head>
 <body>
@@ -73,8 +91,20 @@
     <button class="btn" id="menuBtn">☰ 系統</button>
     <h1>解剖アトラス</h1>
     <div class="sp"></div>
+    <button class="btn" id="shareBtn">🔗 共有</button>
     <button class="btn" id="dissectBtn">✂ 解剖</button>
     <button class="btn" id="resetBtn">リセット</button>
+  </div>
+  <div id="pill"><span class="d"></span><span id="pillT">—</span></div>
+  <div id="share">
+    <div class="hd"><b>共有ルーム</b><span class="st" id="shareSt">未接続</span></div>
+    <div class="fld"><label>ルーム</label><input id="roomCode" type="text" autocapitalize="characters" autocomplete="off" placeholder="AB12CD" /></div>
+    <div class="acts">
+      <button class="btn acc" id="joinBtn">参加</button>
+      <button class="btn" id="claimBtn">操作権を取る</button>
+      <button class="btn" id="leaveBtn">退出</button>
+    </div>
+    <div class="mini" id="shareHint"></div>
   </div>
   <div id="panel">
     <div class="hd"><b>ボディシステム</b><span class="mini" id="sysCount"></span></div>
@@ -108,6 +138,9 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+    import { readRoomParams } from '../sync/config.js';
+    import { createRoom } from '../sync/room.js';
+    import { makeViewSync, HOME_ZOOM } from '../sync/viewsync.js';
 
     // ===== システム分類（モデル別・優先順で先にマッチ。Blenderで全メッシュ検証済み） =====
     // 女性 = HuBMAP VH_Female（未分類0）
@@ -214,6 +247,7 @@
 
     const root = new THREE.Group(); scene.add(root);
     const pickables = []; const bySystem = {}; let selected = null; let dissect = false;
+    let modelObj = null, radiusWorld = 1, radiusLocal = 1;   // 共有ルームの視点計算に使う
     const HOME = { pos:new THREE.Vector3(), tgt:new THREE.Vector3() };
     function goHome(){ camera.position.copy(HOME.pos); controls.target.copy(HOME.tgt); controls.update(); }
 
@@ -258,7 +292,9 @@
           model.position.sub(center); root.add(model);
           const radius = Math.max(size.x, size.y, size.z) * 0.5;
           camera.near = radius/100; camera.far = radius*100; camera.updateProjectionMatrix();
-          const dist = radius / Math.tan(THREE.MathUtils.degToRad(camera.fov*0.5)) * 1.5;
+          // HOME距離は viewsync の HOME_ZOOM を基準にする（HL2側と初期の見かけを揃えるため）
+          const dist = radius * HOME_ZOOM;
+          modelObj = model; radiusWorld = radius; radiusLocal = radius;   // atlasは model.scale=1 なので同値
           HOME.pos.set(0, size.y*0.05, dist); HOME.tgt.set(0,0,0);
           controls.minDistance = radius*0.15; controls.maxDistance = radius*10; goHome();
           for (const s of SYSTEMS){ if(s.off){ for(const m of (bySystem[s.key]||[])) m.visible=false; } }  // 既定オフ系統
@@ -322,7 +358,7 @@
       const hits = raycaster.intersectObjects(pickables, false).filter(h => h.object.visible);  // Raycasterは非表示を無視するので明示的に除外
       if (!hits.length){ closeSel(); return; }
       if (dissect){ hits[0].object.visible = false; }   // 解剖モード: タップで剥がす（皮膚→筋→骨）
-      else select(hits[0].object);
+      else { select(hits[0].object); setPointer(hits[0].point); }
     }
 
     // ===== 選択・ハイライト・カード =====
@@ -407,7 +443,116 @@
     setTimeout(()=>document.getElementById('hint').classList.add('fadeout'), 6000);
 
     addEventListener('resize', () => { camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
-    renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+
+    // ===== 共有ルーム =====
+    const VS = makeViewSync(THREE);
+    const RP = readRoomParams();
+    let room = null, follower = false, wantPose = null, ptrLocal = null;
+    let lastSent = 0, lastJson = '';
+    const shareEl = document.getElementById('share'), pill = document.getElementById('pill');
+    const shareSt = document.getElementById('shareSt'), pillT = document.getElementById('pillT');
+    const roomCode = document.getElementById('roomCode'), shareHint = document.getElementById('shareHint');
+
+    // 注目点マーカー。モデルの子にする＝端末ごとに配置や縮尺が違っても同じ点を指せる
+    let ptrMesh = null;
+    function ensurePtr(){
+      if (!modelObj) return null;
+      if (ptrMesh && ptrMesh.parent === modelObj) return ptrMesh;
+      ptrMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(radiusLocal*0.022, 16, 12),
+        new THREE.MeshBasicMaterial({ color:0x39a0ff, depthTest:false, transparent:true, opacity:0.95 }));
+      ptrMesh.renderOrder = 999; ptrMesh.visible = false;
+      modelObj.add(ptrMesh);
+      return ptrMesh;
+    }
+    function setPointer(worldPoint){   // 発表者が指した点
+      if (!modelObj) return;
+      ptrLocal = VS.encodePoint(modelObj, worldPoint);
+      const m = ensurePtr(); if (m){ m.position.fromArray(ptrLocal); m.visible = true; }
+    }
+    function showPointer(arr){         // 参加者が受け取った点
+      const m = ensurePtr(); if (!m) return;
+      if (!arr){ m.visible = false; return; }
+      m.position.fromArray(arr); m.visible = true;
+    }
+
+    const RCHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // 紛らわしい0/O/1/Iを除く
+    const newCode = () => Array.from({length:6}, () => RCHARS[Math.floor(Math.random()*RCHARS.length)]).join('');
+
+    function setStatus(s){
+      const map = { connecting:['#f2c14b','接続中…'], reconnecting:['#f2c14b','再接続中…'],
+                    open:['#3ddc84','接続'], closed:['#e0524d','切断'] };
+      const [c, t] = map[s] || ['#93a0c0','—'];
+      shareSt.textContent = t;
+      pill.classList.add('show');
+      pill.querySelector('.d').style.background = c;
+      const rt = !room ? '' : room.isPresenter() ? '（操作中）' : '（同期中）';
+      pillT.textContent = t + rt;
+    }
+    function setFollower(v){
+      follower = v;
+      controls.enabled = !v;   // 参加者はカメラ操作を止める（同期と喧嘩させない）
+      document.getElementById('hint').textContent = v
+        ? '参加中：先生の操作に同期しています'
+        : '1本指=回転 ／ 2本指=移動 ／ ピンチ=拡大 ／ タップ=選択';
+      document.getElementById('hint').classList.remove('fadeout');
+      if (!v) showPointer(null);
+    }
+    function join(code){
+      if (!RP.url){ shareHint.textContent = '中継サーバ未設定です。sync/config.js の SYNC_URL を設定するか、URLに ?sync=ws://… を付けてください。'; return; }
+      if (room) room.close();
+      const c = (code || '').toUpperCase().trim(); if (!c) return;
+      roomCode.value = c;
+      room = createRoom({
+        url: RP.url, room: c,
+        onStatus: setStatus,
+        onRole: (isP) => { setFollower(!isP); setStatus(room && room.isConnected() ? 'open' : 'connecting'); },
+        onPose: (d) => { wantPose = d; },
+      });
+      const base = location.origin + location.pathname;
+      shareHint.innerHTML = '参加者用URL:<br><code style="word-break:break-all">' + base + '?room=' + c + '&role=f</code>';
+      if (RP.role === 'presenter') room.claim();
+    }
+    // 中継サーバ未設定のあいだは共有UI自体を出さない（既存の使い勝手を一切変えない）
+    const shareBtn = document.getElementById('shareBtn');
+    if (!RP.enabled) shareBtn.style.display = 'none';
+    shareBtn.addEventListener('click', () => {
+      shareEl.classList.toggle('show');
+      if (!roomCode.value) roomCode.value = RP.room || newCode();
+    });
+    document.getElementById('joinBtn').addEventListener('click', () => join(roomCode.value));
+    document.getElementById('claimBtn').addEventListener('click', () => { if (room) room.claim(); });
+    document.getElementById('leaveBtn').addEventListener('click', () => {
+      if (room){ room.close(); room = null; }
+      setFollower(false); wantPose = null; pill.classList.remove('show'); shareEl.classList.remove('show');
+    });
+    if (RP.enabled && RP.room) join(RP.room);   // QR等からの自動入室
+
+    // 送受信の1ステップ。描画ループから毎フレーム呼ぶ（検証時はタイマーからも呼べる）
+    function syncTick(){
+      if (!room || !modelObj) return;
+      const centerWorld = root.getWorldPosition(new THREE.Vector3());
+      if (follower){
+        if (!wantPose) return;
+        VS.applyOrbit({ camera, controls, model:modelObj, centerWorld, radiusWorld }, wantPose, 0.25);
+        showPointer(wantPose.p || null);
+      } else if (room.isPresenter()){
+        const now = performance.now();
+        if (now - lastSent < 83) return;   // 12Hz。受信側で補間するのでこれで滑らかに見える
+        lastSent = now;
+        const p = VS.encode({ model:modelObj, centerWorld, radiusWorld, camWorld: camera.position });
+        if (ptrLocal) p.p = ptrLocal;
+        const j = JSON.stringify(p);
+        if (j !== lastJson){ lastJson = j; room.sendPose(p); }   // 静止中は送らない
+      }
+    }
+
+    renderer.setAnimationLoop(() => { syncTick(); controls.update(); renderer.render(scene, camera); });
+
+    // 検証用ハンドル（動作には無関係。同期の実測やコンソールからの確認に使う）
+    window.__dbg = { THREE, VS, camera, controls, root, syncTick,
+      get model(){ return modelObj; }, get room(){ return room; }, get wantPose(){ return wantPose; },
+      get radiusWorld(){ return radiusWorld; }, get follower(){ return follower; } };
 
     loadModel(MODELS[0]);
   </script>

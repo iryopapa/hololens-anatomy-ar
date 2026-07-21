@@ -34,6 +34,9 @@
     import * as THREE from 'three';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+    import { readRoomParams } from './sync/config.js';
+    import { createRoom } from './sync/room.js';
+    import { makeViewSync } from './sync/viewsync.js';
     log("three r"+THREE.REVISION+" import OK");
     if('xr' in navigator) navigator.xr.isSessionSupported('immersive-ar').then(s=>log("immersive-ar supported: "+s));
 
@@ -48,6 +51,8 @@
     const dir=new THREE.DirectionalLight(0xffffff,2.0); dir.position.set(1,2,1); scene.add(dir);
 
     const root=new THREE.Group(); scene.add(root);   // 回転・配置用の親
+    let modelObj=null, radiusWorldBase=1, radiusLocal=1;   // 共有ルームの視点計算に使う
+    let follower=false;                                    // 参加者モード（先生の操作に追従）
 
     // === 操作: 片手=平行移動のみ(回転しない) / 両手=回転＋拡大縮小＋移動 ===
     //   重要: 片手はアタッチ(reparent)しない＝手首の傾きを拾わない。これで持ち替えても
@@ -74,8 +79,9 @@
     }
     function refresh(){
       const sel=ctrls.filter(c=>c.userData.sel);
-      if(sel.length>=2){ if(!two) enterTwo(sel[0],sel[1]); }
-      else if(sel.length===1){ enterOne(sel[0]); }
+      // 参加者(follower)は回転・拡縮を先生に任せる。自分の手元では「置き場所」だけ動かせる。
+      if(sel.length>=2 && !follower){ if(!two) enterTwo(sel[0],sel[1]); }
+      else if(sel.length>=1){ enterOne(sel[0]); }
       else { one=null; two=null; log('離した'); }
     }
     const onStart=(e)=>{ e.target.userData.sel=true; refresh(); };
@@ -139,6 +145,7 @@
         const s=0.7/h; model.scale.setScalar(s);
         model.position.sub(center.multiplyScalar(s));   // 原点中心化
         root.add(model);
+        modelObj=model; radiusLocal=h*0.5; radiusWorldBase=h*0.5*s;   // 共有ルーム用
         // local座標は原点=頭の位置。目線やや下・正面0.8mに配置
         root.position.set(0, -0.1, -0.8);
         log(`✓ GLB読込完了 meshes=${meshes} tris=${Math.round(tris)} 元高さ=${h.toFixed(2)} scale=${s.toFixed(3)}`);
@@ -150,10 +157,58 @@
       (err)=>{ log('✗ GLB読込エラー: '+(err.message||err)); }
     );
 
+    // ===== 共有ルーム =====
+    // QRに ?room=XXXX&role=f を入れておけば、HL2は見つめてOpenするだけで参加できる（打鍵ゼロ）。
+    const VS=makeViewSync(THREE), RP=readRoomParams();
+    let room=null, wantPose=null, lastSent=0, lastJson='';
+    const _v=new THREE.Vector3();
+    const camWorld=()=>{
+      const c = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+      return c.getWorldPosition(_v.clone());
+    };
+    // 注目点マーカー。モデルの子にする＝端末ごとに配置や縮尺が違っても同じ点を指せる
+    let ptrMesh=null;
+    function showPointer(arr){
+      if(!modelObj) return;
+      if(!ptrMesh || ptrMesh.parent!==modelObj){
+        ptrMesh=new THREE.Mesh(new THREE.SphereGeometry(radiusLocal*0.022,16,12),
+          new THREE.MeshBasicMaterial({color:0x39a0ff, depthTest:false}));
+        ptrMesh.renderOrder=999; modelObj.add(ptrMesh);
+      }
+      if(!arr){ ptrMesh.visible=false; return; }
+      ptrMesh.position.fromArray(arr); ptrMesh.visible=true;
+    }
+    function syncTick(){
+      if(!room || !modelObj) return;
+      if(follower){
+        if(!wantPose) return;
+        VS.applyTurntable({root, camWorld:camWorld()}, wantPose, 0.2);
+        showPointer(wantPose.p||null);
+      } else if(room.isPresenter()){
+        const now=performance.now();
+        if(now-lastSent<83) return;   // 12Hz
+        lastSent=now;
+        const p=VS.encode({model:modelObj, centerWorld:root.getWorldPosition(new THREE.Vector3()),
+                           radiusWorld:radiusWorldBase*root.scale.x, camWorld:camWorld()});
+        const j=JSON.stringify(p);
+        if(j!==lastJson){ lastJson=j; room.sendPose(p); }
+      }
+    }
+    if(RP.enabled && RP.room){
+      room=createRoom({ url:RP.url, room:RP.room,
+        onStatus:(s)=>log('共有ルーム['+RP.room+']: '+s),
+        onRole:(isP)=>{ follower=!isP; log(follower?'参加者モード（先生の操作に同期／片手で置き場所だけ移動可）':'操作モード（あなたの操作が全員に届きます）'); },
+        onPose:(d)=>{ wantPose=d; } });
+      if(RP.role==='presenter') room.claim();
+    }
+    window.__dbg={THREE,VS,camera,root,syncTick,get model(){return modelObj},get room(){return room},
+      get wantPose(){return wantPose},get follower(){return follower},camWorld};
+
     let frames=0;
     renderer.setAnimationLoop(()=>{
       try{
         updateManip();                   // 両手=回転＋拡大縮小＋移動
+        syncTick();                      // 共有ルーム（未参加なら何もしない）
         renderer.render(scene,camera);   // 自動回転は廃止（手で掴んで回す）
         if(renderer.xr.isPresenting){
           if(frames===0) log("✓ AR初フレーム描画");

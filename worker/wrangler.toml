@@ -1,0 +1,13 @@
+name = "anatomy-sync"
+main = "src/worker.js"
+compatibility_date = "2025-06-01"
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+# 無料プランでは SQLite バックエンドの Durable Object クラスのみ利用できる。
+# new_classes ではなく new_sqlite_classes で宣言すること。
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
