@@ -552,7 +552,7 @@
     // 印刷実寸に合わせること。ここがズレると模型の大きさも距離も全部ズレる。
     // A4に刷ると黒枠の外寸は16cm（実測）。用紙を変えたら定規で測って合わせる。
     // 実機で調整できるよう URL で上書きできる: ?marker=0.16&model=0.5&arres=1280
-    const BUILD = 'v25';   // atlas/sw.js の CACHE と揃える。実機の版ズレ切り分け用
+    const BUILD = 'v26';   // atlas/sw.js の CACHE と揃える。実機の版ズレ切り分け用
     const _q = new URLSearchParams(location.search);
     const MARKER_SIZE_M = Math.max(0.02, parseFloat(_q.get('marker')) || 0.16);   // マーカー一辺(m)
     // 模型はマーカーに比例させる。固定値にするとマーカーを小さく刷ったとき模型だけ巨大になり、
@@ -565,6 +565,8 @@
     const AR_RES_W = Math.max(320, parseInt(_q.get('arres')) || 1280);
     let markerMode = false, arCtx = null, arMarker = null, arjsLoading = null;
     let arVideoSize = '-', arFrames = 0, arHits = 0;   // 遠隔で切り分けるための診断値
+    let arLost = 99;                    // 直近で検出が何フレーム途切れているか（初期は「未検出」）
+    const AR_GRACE = 12;                // 約0.2秒は前回の姿勢を保持し、手ブレ由来のチラつきで模型を消さない
     const markerBtn = document.getElementById('markerBtn');
 
     function loadArjs(){
@@ -629,9 +631,9 @@
       // markerTick が早期 return する間ずっと既定の visible=true のまま出てしまう。
       root.visible = false;
       document.body.classList.add('marker-lost');
-      arFrames = 0; arHits = 0;
+      arFrames = 0; arHits = 0; arLost = 99;
       updateMarkerMsg();
-      updateMarkerHud(false);   // 空のまま出さない（状況が見えないと動いていないと誤解される）
+      updateMarkerHud(false, false);   // 空のまま出さない（状況が見えないと動いていないと誤解される）
       document.body.classList.add('marker-on');
       markerBtn.classList.add('acc');
     }
@@ -649,33 +651,46 @@
 
     function markerTick(){
       // 準備が整っていない・解析に失敗した場合も「未検出」として扱う（出したままにしない）
-      let seen = false;
+      let found = false;
       if (arCtx && camEl.videoWidth){
         try {
           arFrames++;
           arCtx.update(camEl);
-          seen = !!(arMarker && arMarker.object3d && arMarker.object3d.visible);
-          if (seen) arHits++;
-        } catch(e){ seen = false; }
+          found = !!(arMarker && arMarker.object3d && arMarker.object3d.visible);
+          if (found) arHits++;
+        } catch(e){ found = false; }
       }
-      root.visible = seen;
-      document.body.classList.toggle('marker-lost', !seen);
-      if (!seen && arFrames % 15 === 0) updateMarkerMsg();   // 診断値を時々更新
-      if (arFrames % 10 === 0) updateMarkerHud(seen);
+      // 🔥チラつき対策（ヒステリシス）。手持ちのiPadは細かく揺れ、マーカー枠が一瞬切れる
+      //   たびに検出が落ちる。1フレームでも消すと模型が点滅して「出ない」ように見えるので、
+      //   検出が AR_GRACE フレーム続けて途切れるまでは前回の姿勢のまま出し続ける。
+      //   cameraTransformMatrix モードでは未検出フレーム中カメラ行列が更新されないため、
+      //   その間は模型がその場に静止して見える＝安定表示になる。
+      arLost = found ? 0 : arLost + 1;
+      const show = arLost <= AR_GRACE;
+      root.visible = show;
+      document.body.classList.toggle('marker-lost', !show);
+      if (!show && arFrames % 15 === 0) updateMarkerMsg();   // 診断値を時々更新
+      if (arFrames % 10 === 0) updateMarkerHud(found, show);
     }
 
     // 認識できているか、寄りすぎ／離れすぎでないかを常時表示する。
     // 模型が視界の外にあると「動いていない」と誤解するため、状況だけは必ず見えるようにする。
-    function updateMarkerHud(seen){
+    function updateMarkerHud(found, show){
       const hud = document.getElementById('markerHud');
-      if (!seen){ hud.textContent = '未認識 ' + Math.round(arHits/Math.max(1,arFrames)*100) + '%'; return; }
+      if (!show){
+        // 「未認識 69%」は失敗率に見えて誤解を招くので、いま取るべき動作を出す。
+        hud.textContent = arHits > 0
+          ? 'マーカー全体がカメラに入るように、少し引いてください'
+          : 'マーカーを平らに置いて、黒枠ごと全体を映してください';
+        return;
+      }
       const dUnits = camera.position.length();          // マーカー一辺を1とした距離
       const dCm = Math.round(dUnits * MARKER_SIZE_M * 100);
-      const 全体が見える距離cm = Math.round(MODEL_ON_MARKER_M * 1.2 * 100);
+      const fullCm = Math.round(MODEL_ON_MARKER_M * 1.2 * 100);   // 全身が視界に収まる目安
       let advice = '';
-      if (dCm < 全体が見える距離cm * 0.6) advice = ' ・もっと離れて';
-      else if (dCm > MARKER_SIZE_M * 700) advice = ' ・近づいて';
-      hud.textContent = `認識中 ・ 距離 約${dCm}cm（全体が見えるのは約${全体が見える距離cm}cm）${advice}`;
+      if (dCm < fullCm * 0.7) advice = ' ・近づきすぎ、少し離すと全身が見えます';
+      else if (dCm > MARKER_SIZE_M * 700) advice = ' ・遠すぎ、少し近づいて';
+      hud.textContent = `認識中 ・ 距離 約${dCm}cm（全身は約${fullCm}cm）${advice}`;
     }
 
     // 認識しないとき、原因を遠隔で切り分けるための表示
