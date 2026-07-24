@@ -552,7 +552,7 @@
     // 印刷実寸に合わせること。ここがズレると模型の大きさも距離も全部ズレる。
     // A4に刷ると黒枠の外寸は16cm（実測）。用紙を変えたら定規で測って合わせる。
     // 実機で調整できるよう URL で上書きできる: ?marker=0.16&model=0.5&arres=1280
-    const BUILD = 'v27';   // atlas/sw.js の CACHE と揃える。実機の版ズレ切り分け用
+    const BUILD = 'v28';   // atlas/sw.js の CACHE と揃える。実機の版ズレ切り分け用
     const _q = new URLSearchParams(location.search);
     const MARKER_SIZE_M = Math.max(0.02, parseFloat(_q.get('marker')) || 0.16);   // マーカー一辺(m)
     // 模型はマーカーに比例させる。固定値にするとマーカーを小さく刷ったとき模型だけ巨大になり、
@@ -563,10 +563,20 @@
     // マーカーが小さいほど認識できる距離が縮む（経験則で一辺の6〜7倍）。18cmだと約1.1〜1.3m。
     // 検出解像度を上げると範囲と安定性が稼げるが、その分CPUを使う。
     const AR_RES_W = Math.max(320, parseInt(_q.get('arres')) || 1280);
-    let markerMode = false, arCtx = null, arMarker = null, arjsLoading = null, arMarkerRoot = null;
+    let markerMode = false, arCtx = null, arMarker = null, arjsLoading = null, arMarkerRoot = null, arDisplay = null;
     let arVideoSize = '-', arFrames = 0, arHits = 0;   // 遠隔で切り分けるための診断値
     let arLost = 99;                    // 直近で検出が何フレーム途切れているか（初期は「未検出」）
     const AR_GRACE = 12;                // 約0.2秒は前回の姿勢を保持し、手ブレ由来のチラつきで模型を消さない
+    // 🔥姿勢の安定化フィルタ。平面1枚マーカーは斜めから見ると姿勢が2つに定まらず（planar
+    //   pose ambiguity）、奥行き（見かけの大小）と向き（反転）がフレームごとに飛ぶ。AR.js
+    //   が受け取る生の姿勢(arMarkerRoot)と画面に出す姿勢(arDisplay)を分け、飛んだ姿勢は棄却し
+    //   良い姿勢だけに slerp/lerp で滑らかに追従する。
+    let arHasPose = false, arRejects = 0;
+    const AR_POS_LERP = 0.35, AR_ROT_SLERP = 0.35;   // 追従の滑らかさ（大きいほど機敏・小さいほど安定）
+    const AR_FLIP_DEG = 40;                          // 1フレームでこれ以上向きが飛んだら反転とみなし棄却
+    const AR_DIST_HI = 1.7, AR_DIST_LO = 0.58;       // 奥行きがこの比を外れて飛んだら棄却
+    const AR_MAX_REJECT = 18;                        // 棄却が続いたら（本当に動いた）強制再同期
+    const _mkP = new THREE.Vector3(), _mkQ = new THREE.Quaternion();   // 毎フレームの生成を避ける作業用
     const markerBtn = document.getElementById('markerBtn');
 
     function loadArjs(){
@@ -627,20 +637,23 @@
       camera.position.set(0, 0, 0);
       camera.quaternion.identity();
       camera.updateMatrixWorld(true);
-      arMarkerRoot = new THREE.Group();          // マーカーの姿勢を受け取り、その子に模型を吊るす
-      scene.add(arMarkerRoot);
-      arMarkerRoot.add(root);                     // 模型をマーカー座標系へ。placeOnMarkerで立たせる
+      // arMarkerRoot＝AR.jsが生の姿勢を書き込むだけの受け皿（モデルは吊るさない・描画しない）。
+      // arDisplay＝棄却＋平滑化した姿勢を載せ、その子に模型を吊るす実際の表示用。
+      arMarkerRoot = new THREE.Group(); scene.add(arMarkerRoot);
+      arDisplay = new THREE.Group(); scene.add(arDisplay);
+      arDisplay.add(root);                        // 模型は表示用グループの子（scaleは常に1）
       arMarker = new THREEx.ArMarkerControls(arCtx, arMarkerRoot, {
         type: 'pattern',
         patternUrl: './vendor/arjs/patt.hiro',
         changeMatrixMode: 'modelViewMatrix',       // マーカー姿勢を反転せずオブジェクトに適用
-        smooth: true, smoothCount: 5, smoothTolerance: 0.01, smoothThreshold: 2,
+        smooth: false,                             // AR.jsの行列平均は反転を混ぜて悪化させるので自前で平滑化
       });
       markerMode = true;
       placeOnMarker();
-      // マーカー未検出のあいだ AR.js が arMarkerRoot.visible=false にするので模型は出ない。
-      // 子である root 自体は表示のままにして、可視は arMarkerRoot 側で一括制御する。
-      root.visible = true;
+      // マーカー未検出のあいだ arDisplay.visible=false にするので模型は出ない。
+      // 子である root 自体は表示のままにして、可視は arDisplay 側で一括制御する。
+      root.visible = true; arDisplay.visible = false;
+      arHasPose = false; arRejects = 0;
       document.body.classList.add('marker-lost');
       arFrames = 0; arHits = 0; arLost = 99;
       updateMarkerMsg();
@@ -653,7 +666,8 @@
       markerMode = false;
       arMarker = null; arCtx = null;
       document.body.classList.remove('marker-lost', 'marker-on');
-      if (arMarkerRoot){ scene.add(root); scene.remove(arMarkerRoot); arMarkerRoot = null; }  // 模型をシーン直下へ戻す
+      if (arDisplay){ scene.add(root); scene.remove(arDisplay); arDisplay = null; }   // 模型をシーン直下へ戻す
+      if (arMarkerRoot){ scene.remove(arMarkerRoot); arMarkerRoot = null; }
       root.visible = true;
       markerBtn.classList.remove('acc');
       root.scale.setScalar(1); root.quaternion.identity();
@@ -662,27 +676,45 @@
     }
 
     function markerTick(){
-      // 準備が整っていない・解析に失敗した場合も「未検出」として扱う（出したままにしない）
-      let found = false;
+      // present＝マーカーが今フレーム見えているか（AR.jsが arMarkerRoot.visible に設定）
+      let present = false;
       if (arCtx && camEl.videoWidth){
         try {
           arFrames++;
           arCtx.update(camEl);
-          // modelViewMatrix方式では AR.js が arMarkerRoot.visible を検出状態にする
-          found = !!(arMarkerRoot && arMarkerRoot.visible);
-          if (found) arHits++;
-        } catch(e){ found = false; }
+          present = !!(arMarkerRoot && arMarkerRoot.visible);
+          if (present) arHits++;
+        } catch(e){ present = false; }
       }
-      // 🔥チラつき対策（ヒステリシス）。手持ちのiPadは細かく揺れ、マーカー枠が一瞬切れる
-      //   たびに検出が落ちる。1フレームでも消すと模型が点滅して「出ない」ように見えるので、
-      //   検出が AR_GRACE フレーム続けて途切れるまでは前回の姿勢のまま出し続ける。
-      //   未検出フレーム中は AR.js が行列を更新しないため、保持中は模型がその場に静止＝安定表示。
-      arLost = found ? 0 : arLost + 1;
+      // 🔥姿勢の棄却＋平滑化。マーカーが見えている間だけ、生の姿勢を評価して表示姿勢を更新する。
+      if (present && arDisplay){
+        _mkP.copy(arMarkerRoot.position);          // AR.jsが分解した生の位置・向き
+        _mkQ.copy(arMarkerRoot.quaternion);
+        if (!arHasPose){                            // 初取得はそのまま採用（スナップ）
+          arDisplay.position.copy(_mkP); arDisplay.quaternion.copy(_mkQ);
+          arHasPose = true; arRejects = 0;
+        } else {
+          const ang = arDisplay.quaternion.angleTo(_mkQ);                 // 前回表示との向きの差(rad)
+          const dCur = Math.max(1e-4, arDisplay.position.length());
+          const ratio = _mkP.length() / dCur;                            // 奥行きの飛び具合
+          const bad = ang > AR_FLIP_DEG * Math.PI / 180 || ratio > AR_DIST_HI || ratio < AR_DIST_LO;
+          if (bad && arRejects < AR_MAX_REJECT){
+            arRejects++;                            // 飛んだ姿勢は捨て、前の安定姿勢のまま保持
+          } else {                                  // 良い姿勢／本当に動いた（棄却が続いた）ら採用
+            arRejects = 0;
+            arDisplay.position.lerp(_mkP, AR_POS_LERP);
+            arDisplay.quaternion.slerp(_mkQ, AR_ROT_SLERP);
+          }
+        }
+      }
+      // ヒステリシス＝検出が AR_GRACE フレーム続けて途切れるまでは表示を保持（手ブレの瞬断で消さない）。
+      arLost = present ? 0 : arLost + 1;
       const show = arLost <= AR_GRACE;
-      if (arMarkerRoot) arMarkerRoot.visible = show;   // 可視はマーカー群で一括制御（子のrootは表示のまま）
+      if (arDisplay) arDisplay.visible = show;      // 可視は表示用グループで一括制御
+      if (!show) arHasPose = false;                 // 完全に見失ったら次の取得はスナップで綺麗に復帰
       document.body.classList.toggle('marker-lost', !show);
       if (!show && arFrames % 15 === 0) updateMarkerMsg();   // 診断値を時々更新
-      if (arFrames % 10 === 0) updateMarkerHud(found, show);
+      if (arFrames % 10 === 0) updateMarkerHud(present, show);
     }
 
     // 認識できているか、寄りすぎ／離れすぎでないかを常時表示する。
@@ -696,8 +728,8 @@
           : 'マーカーを平らに置いて、黒枠ごと全体を映してください';
         return;
       }
-      // カメラは原点固定。マーカー群の位置＝カメラからマーカー中心までの距離（一辺=1単位）。
-      const dUnits = arMarkerRoot ? arMarkerRoot.position.length() : 0;
+      // カメラは原点固定。表示用グループの位置＝カメラからマーカー中心までの距離（一辺=1単位）。
+      const dUnits = arDisplay ? arDisplay.position.length() : 0;
       const dCm = Math.round(dUnits * MARKER_SIZE_M * 100);
       const fullCm = Math.round(MODEL_ON_MARKER_M * 1.2 * 100);   // 全身が視界に収まる目安
       let advice = '';
