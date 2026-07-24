@@ -99,6 +99,10 @@
     #share .acts{ display:flex; gap:8px; }
     #share .acts .btn{ flex:1; font-size:14px; padding:11px; }
     #share .mini{ font-size:12px; color:var(--sub); margin-top:10px; line-height:1.55; }
+    #shareQRwrap{ display:none; margin-top:12px; text-align:center; }
+    #shareQRwrap.show{ display:block; }
+    #shareQR{ width:186px; height:186px; background:#fff; border-radius:12px; padding:12px; box-sizing:border-box; }
+    #shareQRwrap .cap{ font-size:12px; color:var(--sub); margin-top:6px; }
     #pill{ position:fixed; z-index:21; right:12px; top:calc(env(safe-area-inset-top) + 58px);
       font-size:12px; font-weight:700; padding:6px 12px; border-radius:20px; display:none;
       border:1px solid var(--line); background:var(--panel); }
@@ -131,9 +135,16 @@
     <div class="hd"><b>共有ルーム</b><span class="st" id="shareSt">未接続</span></div>
     <div class="fld"><label>ルーム</label><input id="roomCode" type="text" autocapitalize="characters" autocomplete="off" placeholder="AB12CD" /></div>
     <div class="acts">
-      <button class="btn acc" id="joinBtn">参加</button>
+      <button class="btn acc" id="startBtn">👩‍🏫 先生として開始</button>
+      <button class="btn" id="joinBtn">🙋 学生として参加</button>
+    </div>
+    <div class="acts" style="margin-top:8px">
       <button class="btn" id="claimBtn">操作権を取る</button>
       <button class="btn" id="leaveBtn">退出</button>
+    </div>
+    <div id="shareQRwrap">
+      <img id="shareQR" src="./vendor/room-qr.svg" alt="学生入室QR" />
+      <div class="cap" id="shareQRcap">学生はこのQRを読む → 参加者として自動入室</div>
     </div>
     <div class="mini" id="shareHint"></div>
   </div>
@@ -552,7 +563,7 @@
     // 印刷実寸に合わせること。ここがズレると模型の大きさも距離も全部ズレる。
     // A4に刷ると黒枠の外寸は16cm（実測）。用紙を変えたら定規で測って合わせる。
     // 実機で調整できるよう URL で上書きできる: ?marker=0.16&model=0.5&arres=1280
-    const BUILD = 'v29';   // atlas/sw.js の CACHE と揃える。実機の版ズレ切り分け用
+    const BUILD = 'v30';   // atlas/sw.js の CACHE と揃える。実機の版ズレ切り分け用
     const _q = new URLSearchParams(location.search);
     const MARKER_SIZE_M = Math.max(0.02, parseFloat(_q.get('marker')) || 0.16);   // マーカー一辺(m)
     // 模型はマーカーに比例させる。固定値にするとマーカーを小さく刷ったとき模型だけ巨大になり、
@@ -883,6 +894,19 @@
 
     const RCHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // 紛らわしい0/O/1/Iを除く
     const newCode = () => Array.from({length:6}, () => RCHARS[Math.floor(Math.random()*RCHARS.length)]).join('');
+    // 授業用の既定クラスコード。同梱の学生QR(atlas/vendor/room-qr.svg)はこのコード専用。
+    // 番号を変えるとQRは合わなくなるので、その場合はURL文字列か tools/make_room_qr.py の印刷QRを使う。
+    const CLASS_ROOM = 'SNM01';
+    const shareQRwrap = document.getElementById('shareQRwrap');
+    // 現在のルームが既定クラスコードのときだけ同梱QRを出す。参加者用URLは常に文字列でも示す。
+    function updateShareQR(){
+      const c = (roomCode.value || '').toUpperCase().trim();
+      const base = location.origin + location.pathname;
+      const stURL = base + '?room=' + c + '&role=f';
+      shareQRwrap.classList.toggle('show', c === CLASS_ROOM);
+      shareHint.innerHTML = '参加者用URL:<br><code style="word-break:break-all">' + stURL + '</code>' +
+        (c === CLASS_ROOM ? '' : '<br><span style="color:#93a0c0">※このルーム番号のQRは配布ツールで発行してください</span>');
+    }
 
     function setStatus(s){
       const map = { connecting:['#f2c14b','接続中…'], reconnecting:['#f2c14b','再接続中…'],
@@ -897,13 +921,14 @@
     function setFollower(v){
       follower = v;
       controls.enabled = !v;   // 参加者はカメラ操作を止める（同期と喧嘩させない）
+      // 参加者にはAR共有の入り方を案内する（同期しても模型の出し方が分からないと使えない）。
       document.getElementById('hint').textContent = v
-        ? '参加中：先生の操作に同期しています'
+        ? '参加中：📷現実に重ねる → 🎯マーカー で先生と同じ模型が出ます'
         : '1本指=回転 ／ 2本指=移動 ／ ピンチ=拡大 ／ タップ=選択';
       document.getElementById('hint').classList.remove('fadeout');
       if (!v) showPointer(null);
     }
-    function join(code){
+    function join(code, asPresenter){
       if (!RP.url){ shareHint.textContent = '中継サーバ未設定です。sync/config.js の SYNC_URL を設定するか、URLに ?sync=ws://… を付けてください。'; return; }
       if (room) room.close();
       const c = (code || '').toUpperCase().trim(); if (!c) return;
@@ -917,19 +942,21 @@
         onPose: (d) => { wantPose = d; },
         onState: (d) => { try { applyState(d); } catch(e){} },
       });
-      const base = location.origin + location.pathname;
-      shareHint.innerHTML = '参加者用URL:<br><code style="word-break:break-all">' + base + '?room=' + c + '&role=f</code>';
-      if (RP.role === 'presenter') room.claim();
+      updateShareQR();
+      if (asPresenter || RP.role === 'presenter') room.claim();   // 先生は入室と同時に操作権を取る
     }
     // 中継サーバ未設定のあいだは共有UI自体を出さない（既存の使い勝手を一切変えない）
     const shareBtn = document.getElementById('shareBtn');
     if (!RP.enabled) shareBtn.style.display = 'none';
     shareBtn.addEventListener('click', () => {
       shareEl.classList.toggle('show');
-      if (!roomCode.value) roomCode.value = RP.room || newCode();
+      if (!roomCode.value) roomCode.value = RP.room || CLASS_ROOM;   // 授業は既定コード＝同梱QRが使える
+      if (shareEl.classList.contains('show')) updateShareQR();
     });
-    // 参加・操作権取得のあとはパネルを閉じる（開いたままだとモデルが隠れて見えない）
-    document.getElementById('joinBtn').addEventListener('click', () => { join(roomCode.value); shareEl.classList.remove('show'); });
+    roomCode.addEventListener('input', updateShareQR);   // 番号を変えたらQR表示/URLを更新
+    // 先生として開始＝入室＋操作権取得を1タップで。学生として参加＝入室のみ（先生に同期）。
+    document.getElementById('startBtn').addEventListener('click', () => { join(roomCode.value, true); shareEl.classList.remove('show'); });
+    document.getElementById('joinBtn').addEventListener('click', () => { join(roomCode.value, false); shareEl.classList.remove('show'); });
     document.getElementById('claimBtn').addEventListener('click', () => { if (room) room.claim(); shareEl.classList.remove('show'); });
     // パネルの外側をタップしても閉じる
     addEventListener('pointerdown', (e) => {
@@ -1022,6 +1049,7 @@
     canvas.addEventListener('pointerdown', (e) => { if (arMode) arPtrs.set(e.pointerId, {x:e.clientX, y:e.clientY}); });
     canvas.addEventListener('pointermove', (e) => {
       if (!arMode || !arPtrs.has(e.pointerId)) return;
+      if (follower) return;   // 参加者は模型を触れない（先生の同期と喧嘩させない・タップ選択は別経路で可）
       const prev = arPtrs.get(e.pointerId);
       arPtrs.set(e.pointerId, {x:e.clientX, y:e.clientY});
       // 1本指ドラッグ＝モデルをその場で回す。位置は動かさないので現実に置いたまま向きだけ変わる。
